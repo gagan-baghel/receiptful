@@ -1,0 +1,154 @@
+# ==============================================================================
+# Production-Grade .gitignore for Receiptful
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Dependencies & Package Managers
+# ------------------------------------------------------------------------------
+/node_modules
+/.pnpm-store
+.pnp
+.pnp.js
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.bun
+bun.lockb
+
+# ------------------------------------------------------------------------------
+# 2. Next.js, Bundlers & Build Outputs
+# ------------------------------------------------------------------------------
+/.next/
+/out/
+/build/
+/dist/
+/.turbo/
+.parcel-cache/
+
+# ------------------------------------------------------------------------------
+# 3. TypeScript & Build Caches
+# ------------------------------------------------------------------------------
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# ------------------------------------------------------------------------------
+# 4. Environment Variables, Secrets & Keys
+# ------------------------------------------------------------------------------
+.env
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.prod
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+
+# ------------------------------------------------------------------------------
+# 5. Logs & Debug Output
+# ------------------------------------------------------------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+*.log
+logs/
+
+# ------------------------------------------------------------------------------
+# 6. Convex Local State & Sockets
+# ------------------------------------------------------------------------------
+.convex/local
+.convex/*.sock
+
+# ------------------------------------------------------------------------------
+# 7. Testing & Code Coverage
+# ------------------------------------------------------------------------------
+/coverage/
+/.nyc_output/
+.vitest/
+junit.xml
+
+# ------------------------------------------------------------------------------
+# 8. Operating System Metadata
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+Icon
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ------------------------------------------------------------------------------
+# 9. IDE, Editors & Development Tools
+# ------------------------------------------------------------------------------
+# JetBrains (IntelliJ, WebStorm, etc.)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Visual Studio Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Visual Studio / Windows IDEs
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.user
+*.userosscache
+*.sln.docstates
+
+# Vim / Emacs / Sublime
+*.sw?
+*.swo
+*.swp
+*.un~
+*.sublime-workspace
+*.sublime-project
+\#*\#
+.\#*
+
+# ------------------------------------------------------------------------------
+# 10. AI Assistant & Scratch Tool Directories
+# ------------------------------------------------------------------------------
+.claude/
+.gemini/
+scratch/
+tmp/
+temp/
+*.tmp

@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Receiptful design tokens.
+ *
+ * Light mode is warm-neutral paper, not blue-grey — receipts are paper, and the
+ * warmth separates this from every default dashboard. Dark mode is true ink
+ * (near-black, a touch warm) rather than navy slate. One accent does all the
+ * work; amber is reserved for "needs a human" and red for destructive only.
+ */
+
+@layer base {
+  :root {
+    --canvas: 40 14% 97%;
+    --background: 0 0% 100%;
+    --foreground: 30 8% 8%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 30 8% 8%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 30 8% 8%;
+
+    /* Deep emerald: confident about money without the neon-fintech look. */
+    --primary: 160 84% 22%;
+    --primary-foreground: 150 40% 98%;
+
+    --secondary: 40 12% 94%;
+    --secondary-foreground: 30 8% 12%;
+
+    --muted: 40 12% 94%;
+    --muted-foreground: 30 5% 42%;
+
+    --accent: 40 14% 93%;
+    --accent-foreground: 30 8% 12%;
+
+    --destructive: 4 74% 44%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 36 12% 88%;
+    --input: 36 12% 86%;
+    --ring: 160 84% 26%;
+
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --canvas: 30 6% 5%;
+    --background: 30 6% 5%;
+    --foreground: 40 14% 96%;
+
+    --card: 30 5% 8%;
+    --card-foreground: 40 14% 96%;
+
+    --popover: 30 5% 9%;
+    --popover-foreground: 40 14% 96%;
+
+    --primary: 158 64% 44%;
+    --primary-foreground: 160 40% 5%;
+
+    --secondary: 30 4% 14%;
+    --secondary-foreground: 40 14% 96%;
+
+    --muted: 30 4% 13%;
+    --muted-foreground: 36 6% 62%;
+
+    --accent: 30 4% 15%;
+    --accent-foreground: 40 14% 96%;
+
+    --destructive: 4 70% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 34 5% 18%;
+    --input: 34 5% 20%;
+    --ring: 158 64% 44%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-canvas text-foreground;
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Money and counts: mono + tabular so columns align and digits never jitter
+     as values update in real time. */
+  .font-numeric {
+    font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  .surface {
+    @apply rounded-xl border bg-card;
+    box-shadow:
+      0 1px 2px hsl(30 8% 8% / 0.04),
+      0 1px 1px hsl(30 8% 8% / 0.02);
+  }
+
+  .dark .surface {
+    box-shadow: none;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  header,
+  nav,
+  aside,
+  [role="dialog"],
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+}
