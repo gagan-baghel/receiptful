@@ -43,6 +43,7 @@ export const metadata: Metadata = {
     siteName: "Receiptful",
   },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Receiptful" },
+  manifest: "/manifest.webmanifest",
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
@@ -81,6 +82,16 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
             Skip to content
           </a>
           <Providers>{children}</Providers>
+          {/* Service worker is wired up in production only. In development
+              it caches the bundle and fights HMR, which is more confusing
+              than offline-first is helpful during local work. */}
+          {process.env.NODE_ENV === "production" ? (
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `if ("serviceWorker" in navigator) { window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); }); }`,
+              }}
+            />
+          ) : null}
         </body>
       </html>
     </ConvexAuthNextjsServerProvider>

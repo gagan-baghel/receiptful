@@ -11,6 +11,7 @@ import {
   quarterOf,
   suggestCategory,
 } from "./lib";
+import { RATE_LIMIT } from "../../lib/rateLimit";
 
 /** Money parsing — the path where a rounding slip becomes a wrong expense total. */
 function testAmounts() {
@@ -190,5 +191,17 @@ testMerchantNormalization();
 testReviewRouting();
 testCategorySuggestion();
 testSearchText();
+
+function testRateLimitThresholds() {
+  // Constants must stay in the order: warn < lock, and both cooldowns positive.
+  assert.ok(
+    RATE_LIMIT.warnAfter < RATE_LIMIT.lockAfter,
+    "warn threshold must be strictly below the lock threshold",
+  );
+  assert.ok(RATE_LIMIT.warnCooldownSeconds > 0);
+  assert.ok(RATE_LIMIT.lockCooldownSeconds > RATE_LIMIT.warnCooldownSeconds);
+}
+
+testRateLimitThresholds();
 
 console.log("convex/model/lib: all checks passed");

@@ -1,0 +1,31 @@
+{
+  "name": "Receiptful",
+  "short_name": "Receiptful",
+  "description": "Capture receipts, extract every field automatically, and export tax-ready reports.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "categories": ["finance", "productivity", "business"],
+  "icons": [
+    { "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icon-light-32x32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/icon-dark-32x32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/apple-icon.png", "sizes": "180x180", "type": "image/png" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Capture receipt",
+      "url": "/dashboard/receipts?capture=1",
+      "description": "Open the camera and snap a new receipt."
+    },
+    {
+      "name": "Tax summary",
+      "url": "/dashboard/tax",
+      "description": "See deductible totals for the current period."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Placeholders so Next can statically resolve `NEXT_PUBLIC_*` at build
+      # time without contacting a real Convex deployment. The CI build does
+      # not need to run; it only needs to typecheck and bundle.
+      NEXT_PUBLIC_CONVEX_URL: https://ci.convex.cloud
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      SITE_URL: http://localhost:3000
+      CONVEX_DEPLOYMENT: ci:placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit checks
+        run: npm test
+      - name: Production build
+        run: npm run build

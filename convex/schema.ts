@@ -464,4 +464,19 @@ export default defineSchema({
   })
     .index("by_workspace", ["workspaceId"])
     .index("by_workspace_entity", ["workspaceId", "entityType", "entityId"]),
+
+  /**
+   * Per-identifier (lower-cased email or hashed IP) login attempt counter.
+   * Lockout is enforced by `convex/rateLimits.ts`. A successful sign-in clears
+   * the row so a single typo never poisons a legitimate account for long.
+   */
+  loginAttempts: defineTable({
+    identifier: v.string(),
+    flow: v.union(v.literal("signIn"), v.literal("signUp"), v.literal("reset")),
+    failedCount: v.number(),
+    lastFailedAt: v.number(),
+    lockedUntil: v.optional(v.number()),
+  })
+    .index("by_identifier", ["identifier"])
+    .index("by_identifier_flow", ["identifier", "flow"]),
 });
