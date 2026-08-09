@@ -101,6 +101,27 @@
 **15. Offline shell**
 ![Offline shell](public/screenshots/15-offline.png)
 
+**16. Dashboard home (Internal)**
+![Dashboard home (Internal)](public/screenshots/16-dashboard-home.png)
+
+**17. Budgets**
+![Budgets](public/screenshots/17-budgets.png)
+
+**18. Billing**
+![Billing](public/screenshots/18-billing.png)
+
+**19. Settings**
+![Settings](public/screenshots/19-settings.png)
+
+**20. Trash**
+![Trash](public/screenshots/20-trash.png)
+
+**21. Analytics**
+![Analytics](public/screenshots/21-analytics.png)
+
+**22. Folders**
+![Folders](public/screenshots/22-folders.png)
+
 ## Requirements
 
 - Node.js 20+ (pinned in `.nvmrc`)

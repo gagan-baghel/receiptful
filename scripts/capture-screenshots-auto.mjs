@@ -19,6 +19,13 @@ const captures = [
   { id: "13-categories", url: "/dashboard/categories", viewport: { width: 1440, height: 900 }, full: true, auth: true },
   { id: "14-pwa-install", url: "/dashboard", viewport: { width: 390, height: 844 }, full: false, auth: true, note: "iOS Safari 'Add to Home Screen' must be captured manually" },
   { id: "15-offline", url: "/offline", viewport: { width: 390, height: 844 }, full: false },
+  { id: "16-dashboard-home", url: "/dashboard", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "17-budgets", url: "/dashboard/budgets", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "18-billing", url: "/dashboard/billing", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "19-settings", url: "/dashboard/settings", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "20-trash", url: "/dashboard/trash", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "21-analytics", url: "/dashboard/analytics", viewport: { width: 1440, height: 900 }, full: true, auth: true },
+  { id: "22-folders", url: "/dashboard/folders", viewport: { width: 1440, height: 900 }, full: true, auth: true },
 ]
 
 async function loadPlaywright() {
