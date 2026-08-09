@@ -56,21 +56,50 @@
 
 ## Screenshots
 
-Three real captures ship in [`public/`](public/) today. The rest of the surfaces need to be recorded against a running deployment and dropped into `public/screenshots/` using the filenames in [Captures pending](#captures-pending) at the bottom of this README.
+**1. Landing**
+![Landing](public/screenshots/01-landing.png)
 
-**Landing**
-![Landing](public/logo.png)
+**2. Sign in**
+![Sign in](public/screenshots/02-signin.png)
 
-**Dashboard home**
+**3. Sign up**
+![Sign up](public/screenshots/03-signup.png)
+
+**4. Welcome**
+![Welcome](public/screenshots/04-welcome.png)
+
+**5. Dashboard home**
 ![Dashboard home](public/hero-dashboard.jpg)
 
-**Mobile capture**
+**6. Receipts browser**
+![Receipts browser](public/screenshots/06-receipts.png)
+
+**7. Receipt detail**
+![Receipt detail](public/screenshots/07-receipt-detail.png)
+
+**8. Mobile capture**
 ![Mobile capture](public/hero-mobile.jpg)
 
-**Mobile platform**
-![Mobile platform](public/playstore.png)
+**9. Tax summary**
+![Tax summary](public/screenshots/09-tax.png)
 
-> The hero-dashboard, hero-mobile, and playstore shots are real device captures. The landing image is the product logo. The remaining surfaces (sign in, sign up, receipts browser, receipt detail, tax, reports, approvals, team, categories, PWA install, offline) have dedicated filenames reserved in `public/screenshots/` — see the table below.
+**10. Reports**
+![Reports](public/screenshots/10-reports.png)
+
+**11. Approvals**
+![Approvals](public/screenshots/11-approvals.png)
+
+**12. Team**
+![Team](public/screenshots/12-team.png)
+
+**13. Categories**
+![Categories](public/screenshots/13-categories.png)
+
+**14. PWA install**
+![PWA install](public/screenshots/14-pwa-install.png)
+
+**15. Offline shell**
+![Offline shell](public/screenshots/15-offline.png)
 
 ## Requirements
 
