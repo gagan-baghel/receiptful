@@ -84,7 +84,10 @@ async function main() {
 
       console.log(`  → ${shot.id}  ${target}`)
       await page.goto(`${BASE}${target}`, { waitUntil: "networkidle" })
-      await page.waitForTimeout(1000) // Give UI more time
+      
+      // Convex uses websockets which networkidle doesn't wait for.
+      // Wait long enough for skeletons (suspense boundaries) to resolve.
+      await page.waitForTimeout(5000) 
 
       const outPath = path.join(OUT_DIR, `${shot.id}.png`)
       await page.screenshot({ path: outPath, fullPage: shot.full })
