@@ -28,6 +28,9 @@ bun.lockb
 /.turbo/
 .parcel-cache/
 
+# Vercel project linkage (local to each machine)
+.vercel
+
 # ------------------------------------------------------------------------------
 # 3. TypeScript & Build Caches
 # ------------------------------------------------------------------------------

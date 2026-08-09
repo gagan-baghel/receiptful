@@ -30,6 +30,7 @@ import type * as rateLimits from "../rateLimits.js";
 import type * as receipts from "../receipts.js";
 import type * as reports from "../reports.js";
 import type * as savedFilters from "../savedFilters.js";
+import type * as seedDemo from "../seedDemo.js";
 import type * as tags from "../tags.js";
 import type * as team from "../team.js";
 import type * as uploads from "../uploads.js";
@@ -65,6 +66,7 @@ declare const fullApi: ApiFromModules<{
   receipts: typeof receipts;
   reports: typeof reports;
   savedFilters: typeof savedFilters;
+  seedDemo: typeof seedDemo;
   tags: typeof tags;
   team: typeof team;
   uploads: typeof uploads;

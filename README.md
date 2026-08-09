@@ -56,20 +56,22 @@
 
 ## Screenshots
 
+Captured against a seeded workspace so every surface shows real-looking data instead of empty states. Ordered to match the path a new user takes through the app.
+
 **1. Landing**
 ![Landing](public/screenshots/01-landing.png)
 
-**2. Sign in**
-![Sign in](public/screenshots/02-signin.png)
-
-**3. Sign up**
+**2. Sign up**
 ![Sign up](public/screenshots/03-signup.png)
+
+**3. Sign in**
+![Sign in](public/screenshots/02-signin.png)
 
 **4. Welcome**
 ![Welcome](public/screenshots/04-welcome.png)
 
 **5. Dashboard home**
-![Dashboard home](public/hero-dashboard.jpg)
+![Dashboard home](public/screenshots/16-dashboard-home.png)
 
 **6. Receipts browser**
 ![Receipts browser](public/screenshots/06-receipts.png)
@@ -77,50 +79,52 @@
 **7. Receipt detail**
 ![Receipt detail](public/screenshots/07-receipt-detail.png)
 
-**8. Mobile capture**
-![Mobile capture](public/hero-mobile.jpg)
-
-**9. Tax summary**
-![Tax summary](public/screenshots/09-tax.png)
-
-**10. Reports**
-![Reports](public/screenshots/10-reports.png)
-
-**11. Approvals**
-![Approvals](public/screenshots/11-approvals.png)
-
-**12. Team**
-![Team](public/screenshots/12-team.png)
-
-**13. Categories**
+**8. Categories**
 ![Categories](public/screenshots/13-categories.png)
 
-**14. PWA install**
-![PWA install](public/screenshots/14-pwa-install.png)
+**9. Folders**
+![Folders](public/screenshots/22-folders.png)
 
-**15. Offline shell**
-![Offline shell](public/screenshots/15-offline.png)
-
-**16. Dashboard home (Internal)**
-![Dashboard home (Internal)](public/screenshots/16-dashboard-home.png)
-
-**17. Budgets**
+**10. Budgets**
 ![Budgets](public/screenshots/17-budgets.png)
 
-**18. Billing**
-![Billing](public/screenshots/18-billing.png)
-
-**19. Settings**
-![Settings](public/screenshots/19-settings.png)
-
-**20. Trash**
-![Trash](public/screenshots/20-trash.png)
-
-**21. Analytics**
+**11. Analytics**
 ![Analytics](public/screenshots/21-analytics.png)
 
-**22. Folders**
-![Folders](public/screenshots/22-folders.png)
+**12. Tax summary**
+![Tax summary](public/screenshots/09-tax.png)
+
+**13. Reports**
+![Reports](public/screenshots/10-reports.png)
+
+**14. Approvals**
+![Approvals](public/screenshots/11-approvals.png)
+
+**15. Team**
+![Team](public/screenshots/12-team.png)
+
+**16. Billing**
+![Billing](public/screenshots/18-billing.png)
+
+**17. Settings**
+![Settings](public/screenshots/19-settings.png)
+
+**18. Trash**
+![Trash](public/screenshots/20-trash.png)
+
+**19. Offline shell**
+![Offline shell](public/screenshots/15-offline.png)
+
+PWA install (the iOS/Android "Add to Home Screen" share-sheet prompt) is a device-native OS surface, not an in-app screen, so it isn't captured here.
+
+Re-capture all of the above after a UI change with [`scripts/capture-screenshots.mjs`](scripts/capture-screenshots.mjs): it signs up a fresh account, seeds it with realistic receipts, budgets, reports and a small team, and screenshots every surface with Playwright.
+
+```bash
+npm install --save-dev playwright && npx playwright install chromium
+npx convex dev            # one terminal
+npm run dev:web           # another terminal
+node scripts/capture-screenshots.mjs
+```
 
 ## Requirements
 
@@ -158,55 +162,6 @@ npm run dev        # in another — runs the Next.js dev server
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The first visit to `/signup` creates the owner account and a personal workspace. After that, staff and members are invited from **Settings → Team**.
-
-## Captures pending
-
-The README's `## Screenshots` section above is a placeholder. The three real captures that ship today are `public/hero-dashboard.jpg`, `public/hero-mobile.jpg`, and `public/playstore.png`. The remaining 11 surfaces need to be recorded against a running deployment (`npm run dev` + `npx convex dev`, with a seeded account) and saved with the filenames below. Once the files are in place, the README renders them automatically — no code changes needed.
-
-| # | Surface | Filename | How to capture |
-| --- | --- | --- | --- |
-| 1 | Landing | `public/screenshots/01-landing.png` | `http://localhost:3000/` — full-page screenshot, 1440 px wide |
-| 2 | Sign in | `public/screenshots/02-signin.png` | `http://localhost:3000/login` — empty form |
-| 3 | Sign up | `public/screenshots/03-signup.png` | `http://localhost:3000/signup` — empty form |
-| 4 | Welcome | `public/screenshots/04-welcome.png` | `http://localhost:3000/dashboard/welcome` (fresh account) |
-| 5 | Dashboard home | `public/hero-dashboard.jpg` | Already shipped |
-| 6 | Receipts browser | `public/screenshots/06-receipts.png` | `http://localhost:3000/dashboard/receipts` with at least 8 receipts uploaded |
-| 7 | Receipt detail | `public/screenshots/07-receipt-detail.png` | `http://localhost:3000/dashboard/receipts/<id>` of an OCR'd receipt |
-| 8 | Mobile capture | `public/hero-mobile.jpg` | Already shipped |
-| 9 | Tax summary | `public/screenshots/09-tax.png` | `http://localhost:3000/dashboard/tax` with a quarter of data |
-| 10 | Reports | `public/screenshots/10-reports.png` | `http://localhost:3000/dashboard/reports` with at least one generated report |
-| 11 | Approvals | `public/screenshots/11-approvals.png` | `http://localhost:3000/dashboard/approvals` with the right-drawer open |
-| 12 | Team | `public/screenshots/12-team.png` | `http://localhost:3000/dashboard/team` with the invite dialog open |
-| 13 | Categories | `public/screenshots/13-categories.png` | `http://localhost:3000/dashboard/categories` |
-| 14 | PWA install | `public/screenshots/14-pwa-install.png` | iOS Safari share sheet showing "Add to Home Screen" on `http://localhost:3000/dashboard` |
-| 15 | Offline shell | `public/screenshots/15-offline.png` | `http://localhost:3000/offline` |
-
-The dashboard and mobile captures are already in `public/` at the file paths shown in the table. Drop the other 11 in at the indicated names, then reorder the "Screenshots" section above to match the on-screen numbering.
-
-### Capture all of them in one go
-
-[`scripts/capture-screenshots.mjs`](scripts/capture-screenshots.mjs) walks every entry in the table using Playwright and writes the PNGs to `public/screenshots/`. It is not a dev-dependency in `package.json` so it doesn't bloat the install — opt in when you're ready to capture.
-
-```bash
-# One-time setup
-npm install --save-dev playwright
-npx playwright install chromium
-
-# Sign in once in a real browser against the running app, then export the
-# session cookies so the script can hit /dashboard/* with auth.
-# (In DevTools → Application → Cookies → http://localhost:3000, copy the
-# Convex auth cookies into scripts/.cookies.json as a Playwright storage
-# state object. The README "Captures pending" note covers the format.)
-
-# Start the app in another terminal
-npx convex dev          # one terminal
-npm run dev             # another terminal
-
-# Capture everything
-node scripts/capture-screenshots.mjs
-```
-
-The script saves 13 of the 15 entries automatically. The two it cannot produce on its own — the iOS share-sheet PWA install and the PWA-launched home-screen icon — still need a manual capture; see the table above.
 
 ## End-to-end user journey
 
