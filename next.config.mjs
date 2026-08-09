@@ -16,6 +16,7 @@ const nextConfig = {
     const connectSrc = [
       "'self'",
       "https://*.convex.cloud",
+      "wss://*.convex.cloud",
       "https://*.convex.site",
       ...(isDev ? ["ws://localhost:*", "http://localhost:*"] : []),
     ];

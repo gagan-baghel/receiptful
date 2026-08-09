@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-const BASE = process.env.SCREENSHOT_BASE_URL ?? "http://localhost:3000"
+const BASE = process.env.SCREENSHOT_BASE_URL ?? "http://localhost:3001"
 const OUT_DIR = path.resolve(process.cwd(), "public/screenshots")
 
 const captures = [
@@ -43,56 +43,57 @@ async function main() {
   
   const browser = await chromium.launch()
   
-  let authContext = null;
   try {
-    const tempContext = await browser.newContext()
-    const page = await tempContext.newPage()
+    const context = await browser.newContext()
+    const page = await context.newPage()
+
+    console.log("Signing up...")
     await page.goto(`${BASE}/signup`, { waitUntil: "networkidle" })
     await page.fill('input[name="name"]', 'Test User')
     const email = `test-${Date.now()}@example.com`
     await page.fill('input[name="email"]', email)
     await page.fill('input[name="workspace"]', 'Test Workspace')
-    await page.fill('input[name="password"]', 'Password123A') // Matches rules
-    await page.click('button[type="submit"]')
-    await page.waitForURL('**/dashboard/welcome', { timeout: 15000 }).catch(() => {})
+    await page.fill('input[name="password"]', 'Password123A')
     
-    // Save auth state
-    const authState = await tempContext.storageState()
-    authContext = authState
-    await tempContext.close()
-    console.log("Logged in successfully.")
-  } catch (err) {
-    console.log("Signup failed, falling back to without auth", err)
-  }
+    console.log("Waiting 5s for React hydration...")
+    await page.waitForTimeout(5000)
+    await page.click('button[type="submit"]')
+    
+    await page.waitForURL('**/dashboard/welcome', { timeout: 30000 })
+    console.log("Logged in successfully. Current URL:", page.url())
 
-  try {
     for (const shot of captures) {
-      const context = await browser.newContext({
-        viewport: shot.viewport,
-        storageState: shot.auth ? authContext : undefined,
-      })
-      const page = await context.newPage()
+      // Create a fresh page for each shot to ensure a clean state (but same context for auth)
+      const shotPage = await context.newPage()
+      
+      if (shot.viewport) {
+        await shotPage.setViewportSize(shot.viewport)
+      }
 
       let target = shot.url
       if (shot.dynamic === "firstReceipt") {
-        await page.goto(`${BASE}/dashboard/receipts`, { waitUntil: "networkidle" })
-        const href = await page.locator('a[href*="/dashboard/receipts/"]').first().getAttribute("href").catch(() => null)
+        await shotPage.goto(`${BASE}/dashboard/receipts`, { waitUntil: "networkidle" })
+        const href = await shotPage.locator('a[href*="/dashboard/receipts/"]').first().getAttribute("href").catch(() => null)
         target = href ?? "/dashboard/receipts"
       }
 
       if (!target) continue
 
       console.log(`  → ${shot.id}  ${target}`)
-      await page.goto(`${BASE}${target}`, { waitUntil: "networkidle" })
+      await shotPage.goto(`${BASE}${target}`, { waitUntil: "networkidle" })
       
-      // Convex uses websockets which networkidle doesn't wait for.
-      // Wait long enough for skeletons (suspense boundaries) to resolve.
-      await page.waitForTimeout(5000) 
+      // Wait until all skeleton loaders (animate-pulse) disappear.
+      await shotPage.waitForSelector('.animate-pulse', { state: 'hidden', timeout: 30000 }).catch(() => {
+        console.log(`    Timeout waiting for skeletons to hide on ${target}`)
+      })
+      await shotPage.waitForTimeout(1000)
 
       const outPath = path.join(OUT_DIR, `${shot.id}.png`)
-      await page.screenshot({ path: outPath, fullPage: shot.full })
-      await context.close()
+      await shotPage.screenshot({ path: outPath, fullPage: shot.full })
+      await shotPage.close()
     }
+    
+    await context.close()
   } finally {
     await browser.close()
   }

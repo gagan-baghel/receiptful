@@ -69,7 +69,7 @@
 ![Welcome](public/screenshots/04-welcome.png)
 
 **5. Dashboard home**
-![Dashboard home](public/screenshots/16-dashboard-home.png)
+![Dashboard home](public/hero-dashboard.jpg)
 
 **6. Receipts browser**
 ![Receipts browser](public/screenshots/06-receipts.png)
@@ -78,7 +78,7 @@
 ![Receipt detail](public/screenshots/07-receipt-detail.png)
 
 **8. Mobile capture**
-![Mobile capture](public/screenshots/14-pwa-install.png)
+![Mobile capture](public/hero-mobile.jpg)
 
 **9. Tax summary**
 ![Tax summary](public/screenshots/09-tax.png)
@@ -161,7 +161,7 @@ Open [http://localhost:3000](http://localhost:3000). The first visit to `/signup
 
 ## Captures pending
 
-The README's `## Screenshots` section above is a placeholder. The real captures that ship today are `public/screenshots/16-dashboard-home.png`, `public/screenshots/14-pwa-install.png`, and `public/playstore.png`. The remaining surfaces need to be recorded against a running deployment (`npm run dev` + `npx convex dev`, with a seeded account) and saved with the filenames below. Once the files are in place, the README renders them automatically — no code changes needed.
+The README's `## Screenshots` section above is a placeholder. The three real captures that ship today are `public/hero-dashboard.jpg`, `public/hero-mobile.jpg`, and `public/playstore.png`. The remaining 11 surfaces need to be recorded against a running deployment (`npm run dev` + `npx convex dev`, with a seeded account) and saved with the filenames below. Once the files are in place, the README renders them automatically — no code changes needed.
 
 | # | Surface | Filename | How to capture |
 | --- | --- | --- | --- |
@@ -169,10 +169,10 @@ The README's `## Screenshots` section above is a placeholder. The real captures 
 | 2 | Sign in | `public/screenshots/02-signin.png` | `http://localhost:3000/login` — empty form |
 | 3 | Sign up | `public/screenshots/03-signup.png` | `http://localhost:3000/signup` — empty form |
 | 4 | Welcome | `public/screenshots/04-welcome.png` | `http://localhost:3000/dashboard/welcome` (fresh account) |
-| 5 | Dashboard home | `public/screenshots/16-dashboard-home.png` | Already shipped |
+| 5 | Dashboard home | `public/hero-dashboard.jpg` | Already shipped |
 | 6 | Receipts browser | `public/screenshots/06-receipts.png` | `http://localhost:3000/dashboard/receipts` with at least 8 receipts uploaded |
 | 7 | Receipt detail | `public/screenshots/07-receipt-detail.png` | `http://localhost:3000/dashboard/receipts/<id>` of an OCR'd receipt |
-| 8 | Mobile capture | `public/screenshots/14-pwa-install.png` | Already shipped |
+| 8 | Mobile capture | `public/hero-mobile.jpg` | Already shipped |
 | 9 | Tax summary | `public/screenshots/09-tax.png` | `http://localhost:3000/dashboard/tax` with a quarter of data |
 | 10 | Reports | `public/screenshots/10-reports.png` | `http://localhost:3000/dashboard/reports` with at least one generated report |
 | 11 | Approvals | `public/screenshots/11-approvals.png` | `http://localhost:3000/dashboard/approvals` with the right-drawer open |
