@@ -155,3 +155,4 @@ scratch/
 tmp/
 temp/
 *.tmp
+.env*
