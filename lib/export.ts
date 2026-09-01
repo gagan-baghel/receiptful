@@ -1,6 +1,6 @@
 "use client"
 
-import { centsToInput, formatDate } from "@/lib/format"
+import { centsToInput, formatDate } from "./format"
 
 export type ExportRow = {
   date: string

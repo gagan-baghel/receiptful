@@ -16,7 +16,7 @@ import {
   quarterOf,
   suggestCategory,
 } from "./lib";
-import { RATE_LIMIT } from "../../lib/rateLimit";
+import { backoffSeconds, RATE_LIMIT } from "../../lib/rateLimit";
 import { convertMinorUnits, deriveRate, minorUnitFactor } from "../../lib/money";
 import { inputToCents } from "../../lib/format";
 import { normalizeExtraction } from "../ocr";
@@ -436,5 +436,26 @@ function testExtractionCrossChecks() {
 }
 
 testExtractionCrossChecks();
+
+/**
+ * The lockout has to escalate enough to matter and cap low enough that a
+ * stranger burning attempts against a known email cannot disable the account.
+ */
+function testLoginBackoff() {
+  assert.equal(backoffSeconds(RATE_LIMIT.lockAfter), RATE_LIMIT.lockCooldownSeconds);
+  assert.equal(backoffSeconds(RATE_LIMIT.lockAfter + 1), RATE_LIMIT.lockCooldownSeconds * 2);
+  assert.equal(backoffSeconds(RATE_LIMIT.lockAfter + 2), RATE_LIMIT.lockCooldownSeconds * 4);
+  assert.equal(
+    backoffSeconds(RATE_LIMIT.lockAfter + 50),
+    RATE_LIMIT.maxCooldownSeconds,
+    "escalation is capped, so a lockout can never be permanent",
+  );
+  assert.ok(
+    RATE_LIMIT.warnAfter < RATE_LIMIT.lockAfter,
+    "users must be warned before they are throttled",
+  );
+}
+
+testLoginBackoff();
 
 console.log("convex/model/lib: all checks passed");

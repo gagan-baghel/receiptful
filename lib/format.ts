@@ -4,9 +4,9 @@
  * conversion all live in `lib/money.ts`; this file only renders.
  */
 
-import { minorUnitDigits, minorUnitFactor, parseAmountToCents } from "@/lib/money"
+import { minorUnitDigits, minorUnitFactor, parseAmountToCents } from "./money"
 
-export { centsToInput, minorUnitDigits, minorUnitFactor } from "@/lib/money"
+export { centsToInput, minorUnitDigits, minorUnitFactor } from "./money"
 
 /**
  * `undefined` tells Intl to use the viewer's own locale, so a European user

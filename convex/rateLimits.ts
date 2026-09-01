@@ -42,9 +42,14 @@ function deriveState(
     };
   }
 
-  const cooling = record.lockedUntil && record.lockedUntil > now;
+  // `allowed` is authoritative: `auth.signIn` refuses to verify a password
+  // while it is false. Windows are bounded and expire on their own, so this
+  // delays an attacker without ever disabling a real account.
+  const cooling = Boolean(record.lockedUntil && record.lockedUntil > now);
+  const hardLocked = cooling && record.failedCount >= RATE_LIMIT.lockAfter;
+
   return {
-    allowed: true,
+    allowed: !hardLocked,
     retryAfterSeconds: cooling ? record.lockedUntil! - now : 0,
     failedCount: record.failedCount,
     warning: record.failedCount >= RATE_LIMIT.warnAfter,

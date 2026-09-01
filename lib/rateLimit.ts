@@ -37,7 +37,7 @@ export function backoffSeconds(failedCount: number): number {
 }
 
 export type RateLimitState = {
-  /** Always true — see the note above. Kept so callers read as intended. */
+  /** False while the server will refuse to check the password. */
   allowed: boolean
   /** Seconds the form asks the user to wait before retrying. 0 when clear. */
   retryAfterSeconds: number
