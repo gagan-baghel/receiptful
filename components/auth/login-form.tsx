@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react"
 import { Eye, EyeOff, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -26,18 +26,31 @@ export function LoginForm() {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Throttle credential-stuffing by checking the counter before each submit.
-  // A short identifier keeps the query cheap; an empty email is a no-op.
+  // Slows repeated failures down and tells the user what is happening. This is
+  // a UX throttle, not an access control — see lib/rateLimit.ts.
   const normalizedEmail = email.trim().toLowerCase()
   const rateState = useQuery(
     api.rateLimits.check,
-    normalizedEmail ? { identifier: normalizedEmail, flow: "signIn" } : "skip",
+    normalizedEmail.includes("@") ? { identifier: normalizedEmail, flow: "signIn" } : "skip",
   ) ?? emptyRateLimitState()
   const recordFailure = useMutation(api.rateLimits.recordFailure)
   const recordSuccess = useMutation(api.rateLimits.recordSuccess)
 
-  const locked = !rateState.allowed
-  const lockedForMinutes = Math.max(1, Math.ceil(rateState.retryAfterSeconds / 60))
+  // Counts down locally so the button explains itself instead of just sitting
+  // disabled with no indication of how long.
+  const [cooldown, setCooldown] = useState(0)
+  useEffect(() => {
+    if (rateState.retryAfterSeconds <= 0) return
+    setCooldown(rateState.retryAfterSeconds)
+  }, [rateState.retryAfterSeconds])
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [cooldown])
+
+  const waiting = cooldown > 0
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -48,12 +61,8 @@ export function LoginForm() {
       return
     }
 
-    if (locked) {
-      setError(
-        `Too many failed attempts. Wait about ${lockedForMinutes} minute${
-          lockedForMinutes === 1 ? "" : "s"
-        } and try again.`,
-      )
+    if (waiting) {
+      setError(`Too many failed attempts. Try again in ${cooldown}s.`)
       return
     }
 
@@ -74,12 +83,10 @@ export function LoginForm() {
         identifier: email.trim().toLowerCase(),
         flow: "signIn",
       }).catch(() => null)
+      if (next?.retryAfterSeconds) setCooldown(next.retryAfterSeconds)
       const fallback =
-        next && !next.allowed
-          ? `Too many failed attempts. Wait about ${Math.max(
-              1,
-              Math.ceil(next.retryAfterSeconds / 60),
-            )} minute${Math.ceil(next.retryAfterSeconds / 60) === 1 ? "" : "s"} and try again.`
+        next?.throttled
+          ? `That didn't match an account. Wait ${next.retryAfterSeconds}s before trying again.`
           : "We couldn't sign you in. Check your details and try again."
       setError(errorMessage(caught, fallback))
       setPending(false)
@@ -94,11 +101,14 @@ export function LoginForm() {
         </Alert>
       ) : null}
 
-      {rateState.warning && !locked ? (
+      {rateState.warning && !waiting ? (
         <Alert role="status">
           <AlertDescription>
-            A few attempts haven&apos;t worked. Double-check your email and password — too many
-            failures will lock the form for 15 minutes.
+            A few attempts haven&apos;t worked. Double-check your email and password, or{" "}
+            <Link href="/forgot-password" className="font-medium underline underline-offset-4">
+              reset your password
+            </Link>
+            .
           </AlertDescription>
         </Alert>
       ) : null}
@@ -115,7 +125,7 @@ export function LoginForm() {
           placeholder="you@company.com"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
-          disabled={pending || locked}
+          disabled={pending}
         />
       </div>
 
@@ -139,13 +149,13 @@ export function LoginForm() {
             placeholder="Enter your password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            disabled={pending || locked}
+            disabled={pending}
             className="pr-10"
           />
           <button
             type="button"
             onClick={() => setShowPassword((value) => !value)}
-            disabled={pending || locked}
+            disabled={pending}
             className="absolute right-0 top-0 flex h-full w-10 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             aria-label={showPassword ? "Hide password" : "Show password"}
           >
@@ -154,14 +164,14 @@ export function LoginForm() {
         </div>
       </div>
 
-      <Button type="submit" className="w-full" disabled={pending || locked}>
+      <Button type="submit" className="w-full" disabled={pending || waiting}>
         {pending ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
             Signing in
           </>
-        ) : locked ? (
-          `Locked — try again in ${lockedForMinutes} min`
+        ) : waiting ? (
+          `Try again in ${cooldown}s`
         ) : (
           "Sign in"
         )}

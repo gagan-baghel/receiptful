@@ -18,8 +18,8 @@
 - **Client-side preprocessing** — deskew, contrast sharpen for faded thermal prints, and compress before upload.
 - **Multi-page document stitching** — combine multi-page invoices or keep them separate, with a single toggle.
 - **20+ structured fields** — merchant, totals, sales tax, date, payment method, last 4 card digits, invoice and receipt numbers, line items.
-- **Confidence scoring & human review** — every extracted field gets a score, low-confidence fields are highlighted so users only touch what needs verification.
-- **Duplicate detection** — flags identical merchants and amounts within 72 hours to prevent accidental double-claims.
+- **Verified extraction** — every extracted field carries a confidence score, and the results are then cross-checked deterministically (subtotal + tax + tip against the total, line items against the total, dates against today, currency against the supported list). Anything that fails a check is routed to human review no matter how confident the model claimed to be.
+- **Duplicate detection** — flags matching merchant and amount within three days of the receipt date to prevent accidental double-claims.
 
 **Organisation**
 - **14 preconfigured tax categories** — 100% / 50% / 0% deductibility built in.
@@ -28,14 +28,14 @@
 - **Saved filters** — every search can be saved and shared with the rest of the workspace.
 
 **Money, currency & budgets**
-- **Multi-currency tracking** — USD, EUR, GBP, INR, AED, CAD, AUD, JPY, SGD and more, with daily FX rate refreshes.
+- **Multi-currency tracking** — 20 currencies including zero-decimal ones like JPY, converted at capture time against a daily FX snapshot. The rate used is stored on the receipt, so a later refresh never rewrites past totals.
 - **Proactive budget ceilings** — workspace or category-level spending limits with alerts at 80% before overruns.
 - **Workspace rollups** — every receipt is converted to the workspace base currency at capture time so totals stay consistent.
 
 **Team & approvals**
 - **Five workspace roles** — Owner, Admin, Manager, Member, Viewer.
-- **Expense approval workflows** — submit for review, assign reviewers, track status, attach comments, full audit trail.
-- **Team invitations** — tokenised join links, role-bound, with automatic expiry.
+- **Expense approval workflows** — submit a report or a single receipt, assign a reviewer (only they or an admin can decide it), track status, attach comments. Receipts lock while under review so an approved total cannot drift, and withdrawing preserves the trail rather than deleting it.
+- **Team invitations** — tokenised join links, role-bound, with automatic expiry. Links are generated for an admin to share; the app does not send invitation email.
 
 **Reporting & exports**
 - **Universal exports** — CSV, formatted Excel (.xlsx) with styled headers, and print-ready PDF.
@@ -43,16 +43,22 @@
 
 **Mobile & offline**
 - **PWA installable** — manifest, service worker, splash and shortcuts; install to home screen on iOS and Android.
-- **Offline shell** — last-loaded screens keep working without a connection; a typed `/offline` fallback covers the rest.
+- **Offline shell** — a typed `/offline` fallback when the network is gone. Authenticated pages are deliberately never cached, so nothing of one user's session can be served to another on a shared device.
 - **Responsive layout** — every dashboard surface is touch-first, including the page editor, rotate and retake flows.
+
+**Money**
+- **Integer minor units everywhere** — one parser (`lib/money.ts`) shared by the browser and the backend, so a thousands separator can never be read as a decimal point and JPY is never inflated 100x.
+- **Fiscal years** — a workspace on an April or July year start gets tax totals and quarters aligned to its own year, not the calendar.
 
 **Production hardening (no third-party services required)**
 - **Security headers** — HSTS, CSP, X-Frame-Options, Referrer-Policy, Permissions-Policy.
-- **Login rate limiting** — Convex-backed attempt counter, soft warn at 3 failures, hard lockout at 6 for 15 minutes.
+- **Login attempt throttle** — Convex-backed counter that warns at 3 failures and adds a short cooldown at 6. This is a UX throttle and an audit signal, not an access control: it is advanced by the client, so it does not stop an attacker calling the auth endpoint directly. It deliberately does not lock accounts, because a public counter that can disable an account is a denial-of-service vector.
 - **Password complexity** — 8+ chars with upper/lower/digit, enforced at sign-up.
-- **Health endpoint** — `GET /api/health` for container orchestrators and uptime checks.
+- **Health endpoint** — `GET /api/health` liveness probe for container orchestrators and uptime checks.
 - **Sitemap & robots** — public surface only, auth and API excluded.
-- **CI** — typecheck, unit tests and production build run on every PR.
+- **Scoped CSP** — `connect-src` is pinned to the deployment's own Convex origin rather than a wildcard over every Convex project.
+- **Billing is off by default** — plan upgrades grant real entitlements, so self-serve upgrades require `BILLING_SELF_SERVE=1`. Without a payment provider wired up, a deployment cannot give away a paid plan.
+- **CI** — typecheck, unit tests and production build run on every PR. Tests cover the money, currency, fiscal-year, keyword and extraction-validation logic, including a regression test for every money bug fixed to date.
 
 ## Screenshots
 

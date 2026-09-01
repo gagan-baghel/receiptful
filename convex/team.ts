@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { PLAN_SEATS } from "./model/defaults";
 import {
   CAPABILITIES,
@@ -84,6 +85,7 @@ export const members = query({
             email: invite.email,
             role: invite.role,
             token: invite.token,
+            emailSent: invite.emailSent,
             expiresAt: invite.expiresAt,
             createdAt: invite._creationTime,
           }))
@@ -178,6 +180,15 @@ export const invite = mutation({
       token,
       invitedBy: user._id,
       expiresAt: Date.now() + INVITE_TTL_MS,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.invites.deliver, {
+      inviteId,
+      to: email,
+      token,
+      workspaceName: workspace.name,
+      inviterName: user.name ?? "",
+      role: args.role,
     });
 
     await writeAudit(ctx, {
@@ -530,6 +541,17 @@ export const leaveWorkspace = mutation({
       .first();
     await ctx.db.patch(user._id, { defaultWorkspaceId: other?.workspaceId });
 
+    return null;
+  },
+});
+
+/** Records whether the invitation email actually went out. */
+export const markInviteDelivery = internalMutation({
+  args: { inviteId: v.id("invites"), sent: v.boolean() },
+  handler: async (ctx, args) => {
+    const invite = await ctx.db.get(args.inviteId);
+    if (!invite) return null;
+    await ctx.db.patch(args.inviteId, { emailSent: args.sent });
     return null;
   },
 });

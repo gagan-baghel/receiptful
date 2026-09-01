@@ -121,6 +121,9 @@ export default defineSchema({
     expiresAt: v.number(),
     acceptedAt: v.optional(v.number()),
     revokedAt: v.optional(v.number()),
+    /** False when no mail provider is configured — the UI then says to share
+     *  the link by hand instead of implying an email went out. */
+    emailSent: v.optional(v.boolean()),
   })
     .index("by_workspace", ["workspaceId"])
     .index("by_token", ["token"])
@@ -237,12 +240,26 @@ export default defineSchema({
     .index("by_workspace_category", ["workspaceId", "categoryId"])
     .index("by_workspace_merchant", ["workspaceId", "merchantNormalized"])
     .index("by_workspace_archived_date", ["workspaceId", "isArchived", "date"])
+    // Sort-order indexes. Sorting a single page in JS gives the top of a page,
+    // not the top of the result set, so every sort the UI offers gets an index
+    // that produces the right global order under pagination.
+    .index("by_workspace_archived_amount", ["workspaceId", "isArchived", "baseAmountCents"])
+    .index("by_workspace_archived_merchant", ["workspaceId", "isArchived", "merchantNormalized"])
+    .index("by_workspace_archived", ["workspaceId", "isArchived"])
     .index("by_workspace_deleted", ["workspaceId", "deletedAt"])
     .index("by_workspace_approval", ["workspaceId", "approvalStatus"])
     .index("by_uploader", ["uploaderId"])
     .searchIndex("search_all", {
       searchField: "searchText",
-      filterFields: ["workspaceId", "isArchived", "categoryId", "classification"],
+      // deletedAt is a filter field so trashed receipts never consume a page
+      // slot — the cause of "no results" on a page that had matches.
+      filterFields: [
+        "workspaceId",
+        "isArchived",
+        "deletedAt",
+        "categoryId",
+        "classification",
+      ],
     }),
 
   receiptPages: defineTable({
@@ -263,6 +280,8 @@ export default defineSchema({
     receiptId: v.id("receipts"),
     workspaceId: v.id("workspaces"),
     provider: v.string(),
+    /** Which prompt produced this row, so history stays attributable. */
+    promptVersion: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("succeeded"),
@@ -272,8 +291,13 @@ export default defineSchema({
     rawText: v.optional(v.string()),
     overallConfidence: v.number(),
     fieldConfidences: v.array(fieldConfidenceValidator),
+    /** Fields that failed a deterministic cross-check of the model's numbers. */
+    inconsistencies: v.optional(v.array(v.string())),
     error: v.optional(v.string()),
     durationMs: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    attempts: v.optional(v.number()),
     processedAt: v.optional(v.number()),
   })
     .index("by_receipt", ["receiptId"])
@@ -390,6 +414,9 @@ export default defineSchema({
     amountCents: v.number(),
     submittedAt: v.number(),
     decidedAt: v.optional(v.number()),
+    /** Who was assigned vs who actually decided — assignment is enforced. */
+    decidedBy: v.optional(v.id("users")),
+    withdrawnAt: v.optional(v.number()),
   })
     .index("by_workspace_status", ["workspaceId", "status"])
     .index("by_reviewer", ["reviewerId", "status"])
@@ -446,6 +473,33 @@ export default defineSchema({
   })
     .index("by_workspace_user", ["workspaceId", "userId"])
     .index("by_workspace", ["workspaceId"]),
+
+  /**
+   * Pre-aggregated spend, maintained incrementally on every receipt write.
+   *
+   * Without this the dashboard collected two full calendar years of receipts on
+   * every subscription and re-filtered them per bucket in JS — fine at a few
+   * hundred receipts, unusable at twenty thousand. Reads are now bounded by the
+   * number of buckets (at most ~730 day rows for two years) rather than by the
+   * number of receipts.
+   *
+   * `kind` picks the grain: "day" buckets by date, "category" and "merchant"
+   * bucket by month and year respectively. `key` is the category id, the
+   * normalized merchant, or "" for day rows.
+   */
+  rollups: defineTable({
+    workspaceId: v.id("workspaces"),
+    kind: v.union(v.literal("day"), v.literal("category"), v.literal("merchant")),
+    bucket: v.string(),
+    key: v.string(),
+    label: v.optional(v.string()),
+    totalCents: v.number(),
+    count: v.number(),
+    taxCents: v.number(),
+    deductibleCents: v.number(),
+  })
+    .index("by_workspace_kind_bucket_key", ["workspaceId", "kind", "bucket", "key"])
+    .index("by_workspace_kind_bucket", ["workspaceId", "kind", "bucket"]),
 
   /** Daily FX snapshot so multi-currency totals roll up to a base currency. */
   exchangeRates: defineTable({

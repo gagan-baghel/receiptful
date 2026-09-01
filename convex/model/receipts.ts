@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { buildSearchText, normalizeMerchant } from "./lib";
+import { applyRollupDelta, contributionOf } from "./rollups";
 
 export type ReceiptListItem = Awaited<ReturnType<typeof serializeReceipt>>;
 
@@ -172,6 +173,8 @@ export async function adjustWorkspaceUsage(
 
 /** Removes a receipt and every row that references it, including blobs. */
 export async function purgeReceipt(ctx: MutationCtx, receipt: Doc<"receipts">) {
+  await applyRollupDelta(ctx, contributionOf(receipt), null);
+
   const [pages, tagLinks, folderLinks, comments, versions, activity, ocr, approvals] =
     await Promise.all([
       ctx.db

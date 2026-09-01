@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { ensureSettings } from "./model/bootstrap";
 import { requireActiveWorkspace, requireUser, writeAudit } from "./model/guards";
-import { isSupportedCurrency } from "./model/lib";
+import { isSupportedCurrency, minorUnitFactor } from "./model/lib";
 
 const DEFAULT_SETTINGS = {
   theme: "system" as const,
@@ -269,16 +269,26 @@ export const cancelAccountDeletion = mutation({
   },
 });
 
-/** Full data export for the active workspace, GDPR-style. */
+/**
+ * Personal data export.
+ *
+ * Scoped to the requesting user, not the workspace: this is "my data", so it
+ * covers the receipts they uploaded and the records attached to them, plus
+ * their own account, settings and notifications. Exporting every colleague's
+ * expense history to any member — which the workspace-wide version did — is a
+ * disclosure, not a subject access request.
+ */
 export const exportMyData = query({
   args: {},
   handler: async (ctx) => {
     const { user, workspace } = await requireActiveWorkspace(ctx);
 
-    const receipts = await ctx.db
-      .query("receipts")
-      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
-      .collect();
+    const receipts = (
+      await ctx.db
+        .query("receipts")
+        .withIndex("by_uploader", (q) => q.eq("uploaderId", user._id))
+        .collect()
+    ).filter((receipt) => receipt.workspaceId === workspace._id);
 
     const categories = await ctx.db
       .query("categories")
@@ -300,31 +310,131 @@ export const exportMyData = query({
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
       .collect();
 
+    const settings = await ctx.db
+      .query("settings")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .unique();
+
+    const notifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+
+    // Records attached to the user's own receipts, so the export is complete
+    // rather than just the tidy parts.
+    const receiptIds = new Set(receipts.map((receipt) => receipt._id));
+
+    const comments = (
+      await Promise.all(
+        receipts.map((receipt) =>
+          ctx.db
+            .query("comments")
+            .withIndex("by_receipt", (q) => q.eq("receiptId", receipt._id))
+            .collect(),
+        ),
+      )
+    ).flat();
+
+    const versions = (
+      await Promise.all(
+        receipts.map((receipt) =>
+          ctx.db
+            .query("receiptVersions")
+            .withIndex("by_receipt", (q) => q.eq("receiptId", receipt._id))
+            .collect(),
+        ),
+      )
+    ).flat();
+
+    const approvals = (
+      await ctx.db
+        .query("approvals")
+        .withIndex("by_submitter", (q) => q.eq("submitterId", user._id))
+        .collect()
+    ).filter((approval) => approval.workspaceId === workspace._id);
+
+    const minor = (currency: string) => (minorUnitFactor(currency) === 1 ? 1 : 100);
+
     return {
       exportedAt: new Date().toISOString(),
-      account: { name: user.name, email: user.email, jobTitle: user.jobTitle },
+      scope: "The account, settings and receipts belonging to the requesting user.",
+      account: {
+        name: user.name,
+        email: user.email,
+        jobTitle: user.jobTitle,
+        onboardingCompleted: user.onboardingCompleted ?? false,
+        deletionRequestedAt: user.deletionRequestedAt ?? null,
+      },
+      settings: settings
+        ? {
+            theme: settings.theme,
+            currency: settings.currency,
+            language: settings.language,
+            timezone: settings.timezone,
+            dateFormat: settings.dateFormat,
+            autoCategorize: settings.autoCategorize,
+            autoArchiveAfterDays: settings.autoArchiveAfterDays ?? null,
+          }
+        : null,
       workspace: { name: workspace.name, baseCurrency: workspace.baseCurrency },
       receipts: receipts.map((receipt) => ({
+        id: receipt._id,
         merchant: receipt.merchant,
-        amount: receipt.amountCents / 100,
+        amount: receipt.amountCents / minor(receipt.currency),
         currency: receipt.currency,
-        tax: receipt.taxCents ? receipt.taxCents / 100 : null,
+        amountInBaseCurrency: receipt.baseAmountCents / minor(workspace.baseCurrency),
+        exchangeRate: receipt.exchangeRate,
+        tax: receipt.taxCents ? receipt.taxCents / minor(receipt.currency) : null,
         date: receipt.date,
         paymentMethod: receipt.paymentMethod,
+        cardLast4: receipt.cardLast4 ?? null,
         category: categories.find((c) => c._id === receipt.categoryId)?.name ?? null,
         notes: receipt.notes ?? "",
         taxDeductible: receipt.taxDeductible,
         classification: receipt.classification,
+        reimbursable: receipt.reimbursable,
+        approvalStatus: receipt.approvalStatus,
+        pageCount: receipt.pageCount,
+        isArchived: receipt.isArchived,
+        deletedAt: receipt.deletedAt ?? null,
         items: receipt.items,
+      })),
+      comments: comments
+        .filter((comment) => receiptIds.has(comment.receiptId))
+        .map((comment) => ({
+          receiptId: comment.receiptId,
+          body: comment.body,
+          createdAt: new Date(comment._creationTime).toISOString(),
+        })),
+      editHistory: versions.map((version) => ({
+        receiptId: version.receiptId,
+        changes: version.changes,
+        editedAt: new Date(version._creationTime).toISOString(),
+      })),
+      approvalsSubmitted: approvals.map((approval) => ({
+        status: approval.status,
+        amount: approval.amountCents / minor(workspace.baseCurrency),
+        submittedAt: new Date(approval.submittedAt).toISOString(),
+        decidedAt: approval.decidedAt ? new Date(approval.decidedAt).toISOString() : null,
+      })),
+      notifications: notifications.map((notification) => ({
+        type: notification.type,
+        title: notification.title,
+        body: notification.body,
+        readAt: notification.readAt ? new Date(notification.readAt).toISOString() : null,
+        createdAt: new Date(notification._creationTime).toISOString(),
       })),
       categories: categories.map((c) => ({ name: c.name, taxTreatment: c.taxTreatment })),
       folders: folders.map((f) => ({ name: f.name })),
       tags: tags.map((t) => ({ name: t.name })),
       budgets: budgets.map((b) => ({
         name: b.name,
-        limit: b.limitCents / 100,
+        limit: b.limitCents / minor(workspace.baseCurrency),
         period: b.period,
       })),
+      /** Receipt images are not inlined; download them from each receipt. */
+      note:
+        "Receipt images are excluded from this JSON. Open a receipt to download its pages.",
     };
   },
 });

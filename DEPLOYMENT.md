@@ -50,6 +50,18 @@ npx convex env set --prod AUTH_RESEND_KEY re_...
 npx convex env set --prod AUTH_EMAIL_FROM "Receiptful <noreply@your-domain.com>"
 ```
 
+## 4b. Billing entitlements
+
+Plan changes grant real seats and storage, so self-serve upgrades are refused
+unless you opt in. Leave this unset until a payment provider is wired up:
+
+```bash
+npx convex env set --prod BILLING_SELF_SERVE 1
+```
+
+Invitation emails go out through the same Resend key as password resets. Without
+it, invites are still created and the team screen says to share the link by hand.
+
 ## 5. Deploy the web app
 
 Set these on the host (Vercel, etc.):
@@ -74,6 +86,19 @@ This pushes the backend and builds the frontend against it in one step.
 2. Add a receipt — it uploads, generates a thumbnail, and either fills in
    automatically or lands in the review queue.
 3. Check `/dashboard/tax` and export a report as CSV.
+
+## After deploying rollups
+
+Dashboard and analytics totals are served from a pre-aggregated `rollups`
+table, maintained incrementally on every receipt write. Receipts created before
+that table existed need one backfill:
+
+```bash
+npx convex run --prod maintenance:rebuildRollups
+```
+
+Safe to re-run at any time — it clears each workspace's buckets before
+recounting them.
 
 ## Scheduled jobs
 

@@ -58,6 +58,46 @@ async function sendWithResend(args: {
   }
 }
 
+/**
+ * Invitation email. Returns false when no provider is configured so the caller
+ * can tell the admin to share the link by hand instead of pretending it sent.
+ */
+export async function sendInviteEmail(args: {
+  to: string;
+  workspaceName: string;
+  inviterName: string;
+  role: string;
+  url: string;
+}): Promise<boolean> {
+  if (!process.env.AUTH_RESEND_KEY) return false;
+
+  const who = args.inviterName ? `${args.inviterName} invited you` : "You have been invited";
+  const escape = (value: string) =>
+    value.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+  await sendWithResend({
+    to: args.to,
+    subject: `${who} to ${args.workspaceName} on Receiptful`,
+    text: `${who} to join ${args.workspaceName} on Receiptful as a ${args.role}.\n\nAccept: ${args.url}\n\nThis link expires in 7 days.`,
+    html: `
+      <div style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#0f172a">
+        <h1 style="font-size:20px;margin:0 0 8px">Join ${escape(args.workspaceName)}</h1>
+        <p style="margin:0 0 24px;color:#475569;font-size:14px;line-height:1.6">
+          ${escape(who)} to track receipts and expenses together as a <strong>${escape(args.role)}</strong>.
+        </p>
+        <p style="margin:0 0 24px">
+          <a href="${escape(args.url)}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:11px 20px;border-radius:6px;font-size:14px;font-weight:600">Accept invitation</a>
+        </p>
+        <p style="margin:0;color:#64748b;font-size:13px;line-height:1.6">
+          This link expires in 7 days. If you weren't expecting it, you can ignore this email.
+        </p>
+      </div>
+    `,
+  });
+
+  return true;
+}
+
 export const ResetPasswordEmail: EmailConfig = {
   id: "reset-password-email",
   type: "email",

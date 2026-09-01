@@ -1,8 +1,7 @@
 "use client"
 
-import * as XLSX from "xlsx"
-
-import { centsToInput, formatDate } from "@/lib/format"
+import { centsToInput, formatDate } from "./format"
+import { buildWorkbook } from "./xlsx"
 
 export type ExportRow = {
   date: string
@@ -104,31 +103,25 @@ export function exportCsv(rows: ExportRow[], name: string, baseCurrency: string)
   download(blob, `${safeName(name)}.csv`)
 }
 
-export function exportExcel(rows: ExportRow[], name: string, baseCurrency: string) {
-  const matrix = toMatrix(rows, baseCurrency)
-  const sheet = XLSX.utils.aoa_to_sheet([[...COLUMNS], ...matrix])
+/**
+ * Loaded on demand: the spreadsheet writer is large and only one button needs
+ * it, so it should not sit in the bundle of every screen that can export.
+ */
+/** Async so callers keep a single rejection path for a failed download. */
+export async function exportExcel(
+  rows: ExportRow[],
+  name: string,
+  baseCurrency: string,
+) {
+  const blob = buildWorkbook({
+    rows: [[...COLUMNS], ...toMatrix(rows, baseCurrency)],
+    sheetName: "Expenses",
+    columnWidths: [
+      12, 26, 18, 12, 9, 14, 12, 10, 16, 11, 16, 16, 14, 13, 18, 24, 40, 20, 10,
+    ],
+  })
 
-  sheet["!cols"] = [
-    { wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 14 },
-    { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 11 }, { wch: 16 }, { wch: 16 },
-    { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 24 }, { wch: 40 }, { wch: 20 },
-    { wch: 10 },
-  ]
-  sheet["!autofilter"] = { ref: XLSX.utils.encode_range({
-    s: { c: 0, r: 0 },
-    e: { c: COLUMNS.length - 1, r: matrix.length },
-  }) }
-
-  const book = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(book, sheet, "Expenses")
-
-  const output = XLSX.write(book, { bookType: "xlsx", type: "array" }) as ArrayBuffer
-  download(
-    new Blob([output], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    }),
-    `${safeName(name)}.xlsx`,
-  )
+  download(blob, `${safeName(name)}.xlsx`)
 }
 
 /**

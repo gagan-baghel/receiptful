@@ -44,8 +44,15 @@ export function useReceiptUpload() {
   const uploadBlob = useCallback(
     async (blob: Blob, fileName: string): Promise<Id<"_storage">> => {
       let lastError: unknown
+      const attempts = 3
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        // Back off between tries. Retrying instantly just reproduces whatever
+        // dropped the first request, which on a phone network is usually a
+        // handover that needs a moment to settle.
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** (attempt - 1)))
+        }
         try {
           const url = await generateUploadUrl()
           const response = await fetch(url, {
@@ -126,10 +133,17 @@ export function useReceiptUpload() {
           }
 
           await finalize({ receiptId, runOcr: options.runOcr ?? true })
-          advance("Reading receipt")
+          advance(
+            options.runOcr === false ? "Saved" : "Queued for reading",
+          )
         }
 
-        setProgress({ value: 1, label: "Done" })
+        // Upload is finished; extraction runs in the background and the receipt
+        // updates itself when it lands. Saying "Done" here overstated it.
+        setProgress({
+          value: 1,
+          label: options.runOcr === false ? "Saved" : "Uploaded — reading in the background",
+        })
         return created
       } catch (caught) {
         setError(errorMessage(caught, "The upload didn't finish. Please try again."))

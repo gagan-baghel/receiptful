@@ -1,23 +1,28 @@
 /**
  * Formatting helpers. Money always arrives from the backend as integer minor
- * units (cents) — never format a float you did arithmetic on.
+ * units — never format a float you did arithmetic on. Parsing, minor units and
+ * conversion all live in `lib/money.ts`; this file only renders.
  */
 
-const ZERO_DECIMAL = new Set(["JPY", "KRW", "VND", "CLP", "ISK"])
+import { minorUnitDigits, minorUnitFactor, parseAmountToCents } from "./money"
 
-export function minorUnits(currency: string) {
-  return ZERO_DECIMAL.has(currency) ? 0 : 2
-}
+export { centsToInput, minorUnitDigits, minorUnitFactor } from "./money"
+
+/**
+ * `undefined` tells Intl to use the viewer's own locale, so a European user
+ * sees European grouping and date order instead of a hardcoded en-US.
+ */
+const VIEWER_LOCALE: string | undefined = undefined
 
 export function formatMoney(
   cents: number,
   currency = "USD",
   options: { compact?: boolean; signed?: boolean; locale?: string } = {},
 ) {
-  const digits = minorUnits(currency)
-  const value = cents / (digits === 0 ? 1 : 100)
+  const digits = minorUnitDigits(currency)
+  const value = cents / minorUnitFactor(currency)
 
-  const formatter = new Intl.NumberFormat(options.locale ?? "en-US", {
+  const formatter = new Intl.NumberFormat(options.locale ?? VIEWER_LOCALE, {
     style: "currency",
     currency,
     minimumFractionDigits: options.compact ? 0 : digits,
@@ -29,20 +34,13 @@ export function formatMoney(
   return options.signed && cents > 0 ? `+${formatted}` : formatted
 }
 
-/** Bare number without a currency symbol — for inputs and CSV cells. */
-export function centsToInput(cents: number | null | undefined, currency = "USD") {
-  if (cents === null || cents === undefined) return ""
-  const digits = minorUnits(currency)
-  return (cents / (digits === 0 ? 1 : 100)).toFixed(digits)
-}
-
-/** Inverse of centsToInput, tolerant of what people actually type. */
+/**
+ * Inverse of `centsToInput`, tolerant of what people actually type. Delegates
+ * to the shared parser so "1,234.56" can never be read as 1.23 — the bug this
+ * function used to have when it did its own comma stripping.
+ */
 export function inputToCents(input: string, currency = "USD"): number {
-  const digits = minorUnits(currency)
-  const cleaned = input.replace(/[^\d.,-]/g, "").replace(/,/g, ".")
-  const value = Number.parseFloat(cleaned)
-  if (!Number.isFinite(value)) return 0
-  return Math.round(value * (digits === 0 ? 1 : 100))
+  return parseAmountToCents(input, currency)
 }
 
 export function formatPercent(value: number, options: { signed?: boolean } = {}) {
@@ -50,14 +48,14 @@ export function formatPercent(value: number, options: { signed?: boolean } = {})
   return options.signed && rounded > 0 ? `+${rounded}%` : `${rounded}%`
 }
 
-const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+const DATE_FORMATTER = new Intl.DateTimeFormat(VIEWER_LOCALE, {
   month: "short",
   day: "numeric",
   year: "numeric",
   timeZone: "UTC",
 })
 
-const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat(VIEWER_LOCALE, {
   month: "short",
   day: "numeric",
   timeZone: "UTC",
@@ -74,7 +72,7 @@ export function formatDate(date: string, options: { short?: boolean } = {}) {
 }
 
 export function formatDateTime(timestamp: number) {
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(VIEWER_LOCALE, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -92,7 +90,7 @@ export function formatRelative(timestamp: number) {
   if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`
   if (seconds < 604_800) return `${Math.round(seconds / 86_400)}d ago`
 
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(VIEWER_LOCALE, {
     month: "short",
     day: "numeric",
     year:

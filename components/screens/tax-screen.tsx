@@ -28,6 +28,9 @@ import {
 } from "@/components/ui/select"
 import { api } from "@/convex/_generated/api"
 import { categoryColor, useChartTheme } from "@/lib/chart-theme"
+import { toast } from "sonner"
+
+import { errorMessage } from "@/lib/errors"
 import { exportCsv, exportExcel, exportPdf } from "@/lib/export"
 import { formatMoney, todayIso } from "@/lib/format"
 
@@ -91,7 +94,11 @@ export function TaxScreen() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => exportExcel(preview.rows, exportName, summary.currency)}
+                  onClick={() =>
+                    void exportExcel(preview.rows, exportName, summary.currency).catch(
+                      (caught) => toast.error(errorMessage(caught, "The Excel export failed.")),
+                    )
+                  }
                 >
                   <FileSpreadsheet className="h-4 w-4" />
                   Excel

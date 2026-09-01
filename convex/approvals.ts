@@ -5,6 +5,7 @@ import {
   notifyUser,
   requireActiveWorkspace,
   requireMember,
+  requireReceipt,
   requireUser,
   writeActivity,
   writeAudit,
@@ -274,6 +275,16 @@ export const decide = mutation({
         message: "You cannot review your own submission.",
       });
     }
+    // Assignment has to mean something. A manager who is not the assigned
+    // reviewer cannot quietly decide someone else's queue; owners and admins
+    // can, because someone has to be able to unblock a departed reviewer.
+    const canOverride = member.role === "owner" || member.role === "admin";
+    if (approval.reviewerId && approval.reviewerId !== user._id && !canOverride) {
+      throw new ConvexError({
+        code: "NOT_REVIEWER",
+        message: "This submission is assigned to another reviewer.",
+      });
+    }
     if (approval.status !== "submitted") {
       throw new ConvexError({
         code: "ALREADY_DECIDED",
@@ -289,7 +300,7 @@ export const decide = mutation({
 
     await ctx.db.patch(args.approvalId, {
       status: args.decision,
-      reviewerId: user._id,
+      decidedBy: user._id,
       decidedAt: Date.now(),
     });
 
@@ -388,14 +399,141 @@ export const withdraw = mutation({
       await ctx.db.patch(approval.receiptId, { approvalStatus: "none" });
     }
 
-    const comments = await ctx.db
-      .query("approvalComments")
-      .withIndex("by_approval", (q) => q.eq("approvalId", args.approvalId))
-      .collect();
-    for (const comment of comments) await ctx.db.delete(comment._id);
+    // The submission and its comments are the audit trail the product promises,
+    // so withdrawal closes the approval rather than erasing it.
+    await ctx.db.patch(args.approvalId, {
+      status: "none",
+      withdrawnAt: Date.now(),
+      decidedAt: Date.now(),
+    });
 
-    await ctx.db.delete(args.approvalId);
+    await ctx.db.insert("approvalComments", {
+      approvalId: args.approvalId,
+      authorId: user._id,
+      body: "Withdrew this submission.",
+      action: "none",
+    });
+
+    await writeAudit(ctx, {
+      workspaceId: approval.workspaceId,
+      actorId: user._id,
+      action: "approval.withdrawn",
+      entityType: "approval",
+      entityId: args.approvalId,
+    });
+
     return null;
+  },
+});
+
+/**
+ * Submits a single receipt for approval — the path a workspace's
+ * `requireApprovalOverCents` threshold routes through. Previously the schema
+ * carried `approvals.receiptId` and four functions read it, but nothing ever
+ * created one, so the whole single-receipt branch was unreachable.
+ */
+export const submitReceipt = mutation({
+  args: { receiptId: v.id("receipts"), note: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { receipt, user, workspace, member } = await requireReceipt(ctx, args.receiptId);
+    assertCapability(member.role, "receipt.create");
+
+    if (receipt.uploaderId !== user._id) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "Only the person who added a receipt can submit it.",
+      });
+    }
+    if (receipt.approvalStatus === "submitted") {
+      throw new ConvexError({
+        code: "ALREADY_SUBMITTED",
+        message: "This receipt is already in review.",
+      });
+    }
+    if (receipt.approvalStatus === "approved") {
+      throw new ConvexError({
+        code: "ALREADY_APPROVED",
+        message: "This receipt was already approved.",
+      });
+    }
+    if (receipt.amountCents <= 0) {
+      throw new ConvexError({
+        code: "INCOMPLETE",
+        message: "Add an amount before submitting this receipt.",
+      });
+    }
+
+    const reviewers = (
+      await ctx.db
+        .query("members")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
+        .collect()
+    ).filter(
+      (candidate) =>
+        candidate.userId !== user._id &&
+        candidate.status === "active" &&
+        ["owner", "admin", "manager"].includes(candidate.role),
+    );
+
+    if (reviewers.length === 0) {
+      throw new ConvexError({
+        code: "NO_REVIEWER",
+        message:
+          "No one can review this yet. Invite a manager or admin to the workspace first.",
+      });
+    }
+
+    const assigned =
+      reviewers.find((reviewer) => reviewer.userId === member.managerId) ?? reviewers[0];
+
+    const approvalId = await ctx.db.insert("approvals", {
+      workspaceId: workspace._id,
+      receiptId: args.receiptId,
+      submitterId: user._id,
+      reviewerId: assigned.userId,
+      status: "submitted",
+      amountCents: receipt.baseAmountCents,
+      submittedAt: Date.now(),
+    });
+
+    await ctx.db.patch(args.receiptId, { approvalStatus: "submitted" });
+
+    if (args.note?.trim()) {
+      await ctx.db.insert("approvalComments", {
+        approvalId,
+        authorId: user._id,
+        body: args.note.trim().slice(0, 2000),
+        action: "submitted",
+      });
+    }
+
+    await notifyUser(ctx, {
+      userId: assigned.userId,
+      workspaceId: workspace._id,
+      type: "approval",
+      title: "Expense submitted",
+      body: `${user.name ?? "A teammate"} submitted ${receipt.merchant || "a receipt"} for approval.`,
+      link: `/dashboard/approvals/${approvalId}`,
+    });
+
+    await writeActivity(ctx, {
+      workspaceId: workspace._id,
+      receiptId: args.receiptId,
+      actorId: user._id,
+      type: "approval_submitted",
+      summary: "Submitted for approval",
+    });
+
+    await writeAudit(ctx, {
+      workspaceId: workspace._id,
+      actorId: user._id,
+      action: "approval.submitted",
+      entityType: "approval",
+      entityId: approvalId,
+      meta: { receiptId: args.receiptId, amountCents: receipt.baseAmountCents },
+    });
+
+    return approvalId;
   },
 });
 

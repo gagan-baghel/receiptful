@@ -53,6 +53,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { promptDialog } from "@/components/common/confirm"
 import { useHaptics } from "@/hooks/use-haptics"
 import { errorMessage } from "@/lib/errors"
 import { formatMoney, PAYMENT_METHOD_LABELS } from "@/lib/format"
@@ -213,6 +214,16 @@ export function ReceiptsBrowser() {
     archived: searchParams.get("archived") === "1" ? true : undefined,
     sort: "date_desc",
   }))
+
+  // The manifest's "Capture receipt" shortcut lands here with ?capture=1.
+  // Without this the home-screen shortcut just opened the list.
+  const captureRequested = searchParams.get("capture") === "1"
+  useEffect(() => {
+    if (!captureRequested) return
+    capture.open()
+    // Drop the parameter so a refresh or back-navigation does not reopen it.
+    router.replace("/dashboard/receipts")
+  }, [capture, captureRequested, router])
 
   // Debounce the search term so typing doesn't fire a query per keystroke.
   const [debouncedTerm, setDebouncedTerm] = useState(term)
@@ -535,7 +546,19 @@ export function ReceiptsBrowser() {
           size="sm"
           className="flex-1"
           onClick={async () => {
-            const name = window.prompt("Name this filter")
+            const name = await promptDialog({
+              title: "Save this filter",
+              description: "It appears in your saved filters and can be shared with the workspace.",
+              label: "Filter name",
+              placeholder: "Q3 client travel",
+              confirmLabel: "Save filter",
+              validate: (value) =>
+                value.length === 0
+                  ? "Give the filter a name."
+                  : value.length > 60
+                    ? "Keep the name under 60 characters."
+                    : null,
+            })
             if (!name?.trim()) return
             try {
               await saveFilter({
