@@ -336,7 +336,11 @@ export function ReportDetail({ reportId }: { reportId: Id<"reports"> }) {
               <FileDown className="h-4 w-4" />
               CSV
             </Button>
-            <Button variant="outline" onClick={() => exportExcel(rows, report.name, currency)}>
+            <Button variant="outline" onClick={() =>
+                void exportExcel(rows, report.name, currency).catch((caught) =>
+                  toast.error(errorMessage(caught, "The Excel export failed.")),
+                )
+              }>
               <FileSpreadsheet className="h-4 w-4" />
               Excel
             </Button>

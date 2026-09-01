@@ -16,6 +16,7 @@ import {
   User,
 } from "lucide-react"
 import { useTheme } from "next-themes"
+import { toast } from "sonner"
 import Image from "next/image"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -30,6 +31,7 @@ import {
 } from "@/components/app/nav-config"
 import { NotificationsMenu } from "@/components/app/notifications-menu"
 import { CaptureProvider, useCapture } from "@/components/capture/capture-provider"
+import { AskProvider, promptDialog } from "@/components/common/confirm"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
@@ -45,6 +47,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useHaptics } from "@/hooks/use-haptics"
+import { errorMessage } from "@/lib/errors"
 import { initials, ROLE_LABELS } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -127,13 +130,32 @@ function WorkspaceSwitcher({ session }: { session: Session }) {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={async () => {
-            const name = window.prompt("Name your new workspace")
-            if (!name?.trim()) return
+            const name = await promptDialog({
+              title: "New workspace",
+              description:
+                "Workspaces keep receipts, categories and team members separate. You can rename it later.",
+              label: "Workspace name",
+              placeholder: "Morgan Design Studio",
+              confirmLabel: "Create workspace",
+              validate: (value) =>
+                value.length < 2
+                  ? "Use at least 2 characters."
+                  : value.length > 80
+                    ? "Keep the name under 80 characters."
+                    : null,
+            })
+            if (!name) return
+
             setPending(true)
-            const workspaceId = await createWorkspace({ name: name.trim() })
-            await switchWorkspace({ workspaceId })
-            setPending(false)
-            router.push("/dashboard")
+            try {
+              const workspaceId = await createWorkspace({ name })
+              await switchWorkspace({ workspaceId })
+              router.push("/dashboard")
+            } catch (caught) {
+              toast.error(errorMessage(caught))
+            } finally {
+              setPending(false)
+            }
           }}
         >
           <Plus className="h-3.5 w-3.5" />
@@ -542,8 +564,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <CaptureProvider>
-      <ShellChrome session={session}>{children}</ShellChrome>
-    </CaptureProvider>
+    <AskProvider>
+      <CaptureProvider>
+        <ShellChrome session={session}>{children}</ShellChrome>
+      </CaptureProvider>
+    </AskProvider>
   )
 }

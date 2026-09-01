@@ -3,60 +3,24 @@ import type { Doc } from "../_generated/dataModel";
 /** ---------- Money ---------- */
 
 /**
- * Parses "1,234.56", "$1 234,56", "1.234,56" and "1,000" into integer cents.
- *
- * Separator disambiguation, in order:
- *  - Both separators present → the last one is the decimal point.
- *  - One separator, repeated → it groups thousands.
- *  - One separator with exactly 3 digits after it → it groups thousands
- *    ("1,000" and "1.000" both mean one thousand, not one).
- *  - Otherwise → it is the decimal point.
- *
- * Digits are assembled as strings rather than via parseFloat, so no amount
- * ever picks up binary floating-point drift on the way to cents.
+ * Money lives in `lib/money.ts` so the browser and the backend share one
+ * parser, one minor-unit table and one conversion rule. Re-exported here
+ * because backend callers reach for `model/lib` by habit.
  */
-export function parseAmountToCents(input: string | number): number {
-  if (typeof input === "number") {
-    return Number.isFinite(input) ? Math.round(input * 100) : 0;
-  }
+import { isSupportedCurrency } from "../../lib/money";
 
-  const cleaned = input.replace(/[^\d.,-]/g, "").trim();
-  if (!cleaned) return 0;
-
-  const negative = cleaned.startsWith("-");
-  const digitsOnly = cleaned.replace(/-/g, "");
-  if (!/\d/.test(digitsOnly)) return 0;
-
-  const lastComma = digitsOnly.lastIndexOf(",");
-  const lastDot = digitsOnly.lastIndexOf(".");
-
-  let decimalIndex = -1;
-  if (lastComma >= 0 && lastDot >= 0) {
-    decimalIndex = Math.max(lastComma, lastDot);
-  } else if (lastComma >= 0 || lastDot >= 0) {
-    const index = Math.max(lastComma, lastDot);
-    const separator = digitsOnly[index];
-    const occurrences = digitsOnly.split(separator).length - 1;
-    const digitsAfter = digitsOnly.length - index - 1;
-    if (occurrences === 1 && digitsAfter !== 3) decimalIndex = index;
-  }
-
-  const whole =
-    decimalIndex >= 0 ? digitsOnly.slice(0, decimalIndex) : digitsOnly;
-  const fraction = decimalIndex >= 0 ? digitsOnly.slice(decimalIndex + 1) : "";
-
-  const wholeDigits = whole.replace(/\D/g, "") || "0";
-  const fractionDigits = fraction.replace(/\D/g, "").padEnd(2, "0").slice(0, 2);
-
-  const cents = Number(wholeDigits) * 100 + Number(fractionDigits);
-  if (!Number.isSafeInteger(cents)) return 0;
-
-  return negative ? -cents : cents;
-}
-
-export function centsToNumber(cents: number): number {
-  return Math.round(cents) / 100;
-}
+export {
+  SUPPORTED_CURRENCIES,
+  isSupportedCurrency,
+  minorUnitFactor,
+  minorUnitDigits,
+  parseAmountToCents,
+  centsToInput,
+  convertMinorUnits,
+  deriveRate,
+  isSaneAmount,
+  MAX_AMOUNT_MINOR,
+} from "../../lib/money";
 
 /** ---------- Dates ---------- */
 
@@ -72,16 +36,8 @@ export function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-export function monthKey(isoDate: string): string {
-  return isoDate.slice(0, 7);
-}
-
-export function yearKey(isoDate: string): string {
-  return isoDate.slice(0, 4);
-}
-
 export function quarterOf(isoDate: string): number {
-  return Math.floor(Number(isoDate.slice(5, 7)) / 3.001) + 1;
+  return Math.ceil(Number(isoDate.slice(5, 7)) / 3);
 }
 
 export function addDaysIso(isoDate: string, days: number): string {
@@ -135,12 +91,52 @@ export function periodRange(
   };
 }
 
+/**
+ * Inclusive date range for a fiscal year labelled `year`, where the year starts
+ * on `startMonth` (1-12). A workspace on an April start means "FY2026" runs
+ * 2026-04-01 to 2027-03-31 — every "year" calculation used to hardcode
+ * January-December and quietly ignore the setting.
+ */
+export function fiscalYearRange(
+  year: string,
+  startMonth = 1,
+): { from: string; to: string } {
+  const start = Math.min(12, Math.max(1, Math.round(startMonth)));
+  if (start === 1) return { from: `${year}-01-01`, to: `${year}-12-31` };
+
+  const startYear = Number(year);
+  const endYear = startYear + 1;
+  const endMonth = start - 1;
+  const lastDay = new Date(Date.UTC(endYear, endMonth, 0)).getUTCDate();
+
+  return {
+    from: `${startYear}-${String(start).padStart(2, "0")}-01`,
+    to: `${endYear}-${String(endMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+  };
+}
+
+/** Which fiscal year an ISO date falls into, given the workspace start month. */
+export function fiscalYearOf(isoDate: string, startMonth = 1): string {
+  const start = Math.min(12, Math.max(1, Math.round(startMonth)));
+  const year = Number(isoDate.slice(0, 4));
+  const month = Number(isoDate.slice(5, 7));
+  return String(month >= start ? year : year - 1);
+}
+
+/** Quarter within the fiscal year (1-4), not the calendar year. */
+export function fiscalQuarterOf(isoDate: string, startMonth = 1): number {
+  const start = Math.min(12, Math.max(1, Math.round(startMonth)));
+  const month = Number(isoDate.slice(5, 7));
+  return Math.floor(((month - start + 12) % 12) / 3) + 1;
+}
+
 /** ---------- Text ---------- */
 
 export function normalizeMerchant(value: string): string {
   return value
     .toLowerCase()
-    .replace(/\b(inc|llc|ltd|limited|corp|co|gmbh|pvt|plc|sa|bv)\b\.?/g, "")
+    .replace(/[.,]/g, " ")
+    .replace(/\s+(inc|llc|ltd|limited|corp|corporation|gmbh|pvt|plc|bv|nv|ag|srl)\s*$/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -188,31 +184,6 @@ export function buildSearchText(parts: {
     .slice(0, 8000);
 }
 
-/** ---------- Currency ---------- */
-
-export const SUPPORTED_CURRENCIES = [
-  "USD", "EUR", "GBP", "INR", "AED", "CAD", "AUD", "JPY", "CHF", "SGD",
-  "NZD", "ZAR", "SEK", "NOK", "DKK", "MXN", "BRL", "CNY", "HKD", "PLN",
-] as const;
-
-export function isSupportedCurrency(code: string): boolean {
-  return (SUPPORTED_CURRENCIES as readonly string[]).includes(code);
-}
-
-/** Currencies whose smallest unit is the unit itself (no minor unit). */
-const ZERO_DECIMAL = new Set(["JPY", "KRW", "VND", "CLP", "ISK"]);
-
-export function minorUnitFactor(currency: string): number {
-  return ZERO_DECIMAL.has(currency) ? 1 : 100;
-}
-
-export function convertCents(
-  amountCents: number,
-  rate: number,
-): number {
-  return Math.round(amountCents * rate);
-}
-
 /** ---------- Receipt derived state ---------- */
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.75;
@@ -242,19 +213,44 @@ export function computeReceiptStatus(receipt: {
   return missingCore || weakCore ? "needs_review" : "ready";
 }
 
+/** Escapes a keyword for use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * True when `keyword` appears in `haystack` as a whole word (or whole phrase),
+ * not as a substring. Without this, the seeded keyword "bar" matches
+ * "Barnes & Noble" and "tea" matches "instead".
+ */
+export function matchesKeyword(haystack: string, keyword: string): boolean {
+  if (!keyword) return false;
+  // \b is unreliable next to non-ASCII, so bound on non-word characters.
+  const pattern = new RegExp(
+    `(^|[^a-z0-9])${escapeRegExp(keyword)}([^a-z0-9]|$)`,
+    "i",
+  );
+  return pattern.test(haystack);
+}
+
+/** Below this, a category suggestion is too weak to apply automatically. */
+export const CATEGORY_SUGGESTION_THRESHOLD = 0.7;
+
 /**
  * Picks the best category for a receipt from the workspace's own categories by
- * scoring keyword hits against merchant name and line items.
+ * scoring whole-word keyword hits against the merchant name and line items.
+ *
+ * Raw OCR text is deliberately NOT part of the haystack: it is attacker-
+ * controlled text lifted off an image, and letting it steer `taxDeductible`
+ * turns a doctored receipt into a tax claim. Merchant and item descriptions are
+ * the fields a human would actually read to categorize.
  */
 export function suggestCategory(
   categories: Doc<"categories">[],
-  input: { merchant: string; items: { description: string }[]; rawText?: string },
+  input: { merchant: string; items: { description: string }[] },
 ): { categoryId: Doc<"categories">["_id"]; confidence: number } | null {
-  const haystack = [
-    input.merchant,
-    ...input.items.map((item) => item.description),
-    input.rawText?.slice(0, 2000) ?? "",
-  ]
+  const merchant = input.merchant.toLowerCase();
+  const haystack = [input.merchant, ...input.items.map((item) => item.description)]
     .join(" ")
     .toLowerCase();
 
@@ -267,22 +263,76 @@ export function suggestCategory(
 
     let score = 0;
     for (const keyword of category.keywords) {
-      if (!keyword) continue;
-      if (haystack.includes(keyword)) {
-        // Merchant-name hits are far stronger evidence than body-text hits.
-        score += input.merchant.toLowerCase().includes(keyword) ? 3 : 1;
-      }
+      const normalized = keyword.trim().toLowerCase();
+      if (!normalized) continue;
+      if (!matchesKeyword(haystack, normalized)) continue;
+      // Merchant-name hits are far stronger evidence than item-text hits.
+      score += matchesKeyword(merchant, normalized) ? 3 : 1;
     }
 
-    if (score > 0 && (!best || score > best.score)) {
-      best = { categoryId: category._id, score };
+    // Ties break deterministically by name so two workspaces with the same
+    // categories always land on the same answer.
+    if (score > 0) {
+      if (!best || score > best.score) {
+        best = { categoryId: category._id, score };
+      }
     }
   }
 
   if (!best) return null;
 
-  return {
-    categoryId: best.categoryId,
-    confidence: Math.min(0.5 + best.score * 0.15, 0.97),
-  };
+  const confidence = Math.min(0.4 + best.score * 0.12, 0.97);
+  if (confidence < CATEGORY_SUGGESTION_THRESHOLD) return null;
+
+  return { categoryId: best.categoryId, confidence };
+}
+
+/**
+ * Deterministic checks against the model's own numbers. Self-reported
+ * confidence is not calibrated, so this is what actually routes a bad
+ * extraction to a human: arithmetic that does not add up, a date that cannot
+ * be right, or a currency we do not support.
+ */
+export function findInconsistencies(input: {
+  amountCents?: number;
+  subtotalCents?: number;
+  taxCents?: number;
+  tipCents?: number;
+  itemTotalCents?: number;
+  date?: string;
+  currency?: string;
+  today?: string;
+}): string[] {
+  const flags: string[] = [];
+  const total = input.amountCents;
+
+  if (total !== undefined) {
+    if (total <= 0) flags.push("amount");
+
+    const parts = [input.subtotalCents, input.taxCents, input.tipCents];
+    if (input.subtotalCents !== undefined && parts.some((p) => p !== undefined)) {
+      const sum = parts.reduce<number>((acc, part) => acc + (part ?? 0), 0);
+      // One minor unit of slack per component covers legitimate rounding.
+      if (Math.abs(sum - total) > 3) flags.push("amount");
+    }
+
+    if (input.taxCents !== undefined && input.taxCents > total) flags.push("tax");
+
+    if (input.itemTotalCents !== undefined && input.itemTotalCents > 0) {
+      // Line items rarely cover tip, so only flag when they overshoot the total.
+      if (input.itemTotalCents > total + 3) flags.push("amount");
+    }
+  }
+
+  if (input.date) {
+    const today = input.today ?? new Date().toISOString().slice(0, 10);
+    const tenYearsAgo = `${Number(today.slice(0, 4)) - 10}${today.slice(4)}`;
+    if (input.date > today || input.date < tenYearsAgo) flags.push("date");
+  }
+
+  if (input.currency && !isSupportedCurrency(input.currency.toUpperCase())) {
+    flags.push("currency");
+  }
+
+  return [...new Set(flags)];
 }

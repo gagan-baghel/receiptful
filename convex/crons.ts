@@ -22,6 +22,12 @@ crons.daily(
 );
 
 crons.daily(
+  "sweep abandoned uploads",
+  { hourUTC: 2, minuteUTC: 30 },
+  internal.maintenance.sweepAbandonedUploads,
+);
+
+crons.daily(
   "auto-archive old receipts",
   { hourUTC: 4, minuteUTC: 0 },
   internal.maintenance.autoArchive,

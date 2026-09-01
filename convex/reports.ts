@@ -8,7 +8,7 @@ import {
   requireMember,
   writeAudit,
 } from "./model/guards";
-import { quarterOf, todayIso } from "./model/lib";
+import { fiscalQuarterOf, fiscalYearOf, fiscalYearRange, todayIso } from "./model/lib";
 
 const reportTypeValidator = v.union(
   v.literal("expense"),
@@ -440,16 +440,17 @@ export const taxSummary = query({
   args: { year: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { workspace } = await requireActiveWorkspace(ctx);
-    const year = args.year ?? todayIso().slice(0, 4);
+    const startMonth = workspace.fiscalYearStartMonth || 1;
+    const year = args.year ?? fiscalYearOf(todayIso(), startMonth);
+    // Honours the workspace's fiscal year instead of assuming Jan-Dec, which
+    // silently produced wrong totals for anyone not on a calendar year.
+    const { from, to } = fiscalYearRange(year, startMonth);
 
     const receipts = (
       await ctx.db
         .query("receipts")
         .withIndex("by_workspace_date", (q) =>
-          q
-            .eq("workspaceId", workspace._id)
-            .gte("date", `${year}-01-01`)
-            .lte("date", `${year}-12-31`),
+          q.eq("workspaceId", workspace._id).gte("date", from).lte("date", to),
         )
         .collect()
     ).filter((receipt) => receipt.deletedAt === undefined);
@@ -484,7 +485,9 @@ export const taxSummary = query({
     }
 
     const quarters = [1, 2, 3, 4].map((quarter) => {
-      const rows = deductible.filter((receipt) => quarterOf(receipt.date) === quarter);
+      const rows = deductible.filter(
+        (receipt) => fiscalQuarterOf(receipt.date, startMonth) === quarter,
+      );
       return {
         quarter,
         totalCents: rows.reduce((total, receipt) => total + receipt.baseAmountCents, 0),
@@ -499,6 +502,9 @@ export const taxSummary = query({
 
     return {
       year,
+      fromDate: from,
+      toDate: to,
+      fiscalYearStartMonth: startMonth,
       currency: workspace.baseCurrency,
       taxLabel: workspace.taxLabel,
       totalDeductibleCents: deductible.reduce(
@@ -538,11 +544,14 @@ export const availableYears = query({
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
       .collect();
 
+    const startMonth = workspace.fiscalYearStartMonth || 1;
     const years = new Set<string>();
     for (const receipt of receipts) {
-      if (receipt.deletedAt === undefined) years.add(receipt.date.slice(0, 4));
+      if (receipt.deletedAt === undefined) {
+        years.add(fiscalYearOf(receipt.date, startMonth));
+      }
     }
-    years.add(todayIso().slice(0, 4));
+    years.add(fiscalYearOf(todayIso(), startMonth));
 
     return [...years].sort((a, b) => b.localeCompare(a));
   },

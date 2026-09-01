@@ -165,7 +165,10 @@ export const storageStats = query({
       .filter((receipt) => receipt.isArchived && receipt.deletedAt === undefined)
       .reduce((sum, receipt) => sum + receipt.storageBytes, 0);
 
-    const totalBytes = pages.reduce((sum, page) => sum + page.sizeBytes, 0);
+    // The quota gate enforces workspace.storageUsedBytes, so that is the number
+    // the UI must show. The recomputed sum is kept alongside it as a drift
+    // check rather than being presented as a second, disagreeing truth.
+    const measuredBytes = pages.reduce((sum, page) => sum + page.sizeBytes, 0);
 
     const byType = pages.reduce<Record<string, number>>((acc, page) => {
       const key = page.mimeType === "application/pdf" ? "PDF" : "Image";
@@ -174,7 +177,9 @@ export const storageStats = query({
     }, {});
 
     return {
-      usedBytes: totalBytes,
+      usedBytes: workspace.storageUsedBytes,
+      measuredBytes,
+      driftBytes: workspace.storageUsedBytes - measuredBytes,
       quotaBytes: workspace.storageQuotaBytes,
       pageCount: pages.length,
       receiptCount: receipts.filter((receipt) => receipt.deletedAt === undefined).length,
@@ -187,8 +192,13 @@ export const storageStats = query({
 });
 
 /**
- * Plan changes. Billing is entitlement-only: the app enforces seats and storage
- * limits, and payment capture is handled by the billing provider integration.
+ * Plan changes.
+ *
+ * Seats and storage are enforced by the app, but nothing here captures payment.
+ * Self-serve upgrades are therefore off unless the deployment explicitly opts
+ * in with BILLING_SELF_SERVE=1 (useful for demos and self-hosting), so a
+ * default deployment cannot hand out a paid plan for free. Downgrades are
+ * always allowed — nobody needs permission to stop using capacity.
  */
 export const changePlan = mutation({
   args: {
@@ -206,6 +216,19 @@ export const changePlan = mutation({
       .query("members")
       .withIndex("by_workspace", (q) => q.eq("workspaceId", args.workspaceId))
       .collect();
+
+    const RANK = { free: 0, pro: 1, business: 2 } as const;
+    const isUpgrade = RANK[args.plan] > RANK[workspace.plan];
+
+    if (isUpgrade && process.env.BILLING_SELF_SERVE !== "1") {
+      throw new ConvexError({
+        code: "BILLING_NOT_CONFIGURED",
+        message:
+          "Paid plans are not available on this deployment yet. Contact the workspace administrator to arrange an upgrade.",
+      });
+    }
+
+    if (args.plan === workspace.plan) return null;
 
     const seats = PLAN_SEATS[args.plan];
     if (members.length > seats) {

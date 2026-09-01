@@ -3,21 +3,33 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import {
   assertCanEditReceipt,
   assertCapability,
+  hasCapability,
   requireActiveWorkspace,
+  notifyUser,
   requireMember,
   requireReceipt,
   writeActivity,
   writeAudit,
 } from "./model/guards";
 import {
+  centsToInput,
   computeReceiptStatus,
+  isSaneAmount,
+  isSupportedCurrency,
   isValidIsoDate,
   normalizeMerchant,
   todayIso,
 } from "./model/lib";
+import { convertForWorkspace } from "./model/fx";
+import {
+  applyRollupDelta,
+  contributionOf,
+  syncRollups,
+} from "./model/rollups";
 import {
   adjustWorkspaceUsage,
   findDuplicate,
@@ -177,22 +189,62 @@ async function resolveJoinFilters(
   return { tagMatches, folderMatches };
 }
 
-function sortReceipts(receipts: Doc<"receipts">[], sort: Filters["sort"]) {
-  const sorted = [...receipts];
-  switch (sort) {
-    case "date_asc":
-      return sorted.sort((a, b) => a.date.localeCompare(b.date));
-    case "amount_desc":
-      return sorted.sort((a, b) => b.baseAmountCents - a.baseAmountCents);
-    case "amount_asc":
-      return sorted.sort((a, b) => a.baseAmountCents - b.baseAmountCents);
-    case "merchant_asc":
-      return sorted.sort((a, b) => a.merchant.localeCompare(b.merchant));
-    case "created_desc":
-      return sorted.sort((a, b) => b._creationTime - a._creationTime);
-    default:
-      return sorted.sort((a, b) => b.date.localeCompare(a.date));
+/**
+ * Picks the index that already produces the requested order. Sorting a page in
+ * JS only orders that page, so "highest amount" would return the largest of an
+ * arbitrary date-ordered window rather than of the whole result set.
+ */
+function planQuery(
+  ctx: QueryCtx,
+  workspaceId: Id<"workspaces">,
+  filters: Filters,
+  includeArchived: boolean,
+) {
+  const sort = filters.sort ?? "date_desc";
+  const ascending = sort === "date_asc" || sort === "amount_asc" || sort === "merchant_asc";
+  const order = ascending ? ("asc" as const) : ("desc" as const);
+
+  if (sort === "amount_desc" || sort === "amount_asc") {
+    return ctx.db
+      .query("receipts")
+      .withIndex("by_workspace_archived_amount", (q) =>
+        q.eq("workspaceId", workspaceId).eq("isArchived", includeArchived),
+      )
+      .order(order);
   }
+
+  if (sort === "merchant_asc") {
+    return ctx.db
+      .query("receipts")
+      .withIndex("by_workspace_archived_merchant", (q) =>
+        q.eq("workspaceId", workspaceId).eq("isArchived", includeArchived),
+      )
+      .order("asc");
+  }
+
+  if (sort === "created_desc") {
+    // Every Convex index is implicitly tie-broken by _creationTime, so a
+    // two-field prefix ordered desc is exactly "newest first".
+    return ctx.db
+      .query("receipts")
+      .withIndex("by_workspace_archived", (q) =>
+        q.eq("workspaceId", workspaceId).eq("isArchived", includeArchived),
+      )
+      .order("desc");
+  }
+
+  return ctx.db
+    .query("receipts")
+    .withIndex("by_workspace_archived_date", (q) => {
+      const scoped = q.eq("workspaceId", workspaceId).eq("isArchived", includeArchived);
+      // A date range can only be pushed into the index when date is the sort
+      // key; otherwise it stays a JS predicate in matchesFilters.
+      if (filters.from && filters.to) return scoped.gte("date", filters.from).lte("date", filters.to);
+      if (filters.from) return scoped.gte("date", filters.from);
+      if (filters.to) return scoped.lte("date", filters.to);
+      return scoped;
+    })
+    .order(order);
 }
 
 export const list = query({
@@ -207,22 +259,24 @@ export const list = query({
 
     const { tagMatches, folderMatches } = await resolveJoinFilters(ctx, filters);
 
-    // Free-text search routes through the search index; everything else scans
-    // the workspace/date index which is already in the desired sort order.
+    // Free-text search routes through the search index. Deleted and archived
+    // rows are excluded by the index itself rather than after the page is cut,
+    // so a full trash can no longer produce empty pages of live results.
     if (filters.search && filters.search.trim().length > 0) {
       const term = filters.search.trim().slice(0, 200);
       const results = await ctx.db
         .query("receipts")
         .withSearchIndex("search_all", (q) =>
-          q.search("searchText", term).eq("workspaceId", workspace._id),
+          q
+            .search("searchText", term)
+            .eq("workspaceId", workspace._id)
+            .eq("isArchived", includeArchived)
+            .eq("deletedAt", undefined),
         )
         .paginate(args.paginationOpts);
 
-      const page = results.page.filter(
-        (receipt) =>
-          receipt.deletedAt === undefined &&
-          receipt.isArchived === includeArchived &&
-          matchesFilters(receipt, filters, tagMatches, folderMatches),
+      const page = results.page.filter((receipt) =>
+        matchesFilters(receipt, filters, tagMatches, folderMatches),
       );
 
       return {
@@ -231,17 +285,9 @@ export const list = query({
       };
     }
 
-    const results = await ctx.db
-      .query("receipts")
-      .withIndex("by_workspace_archived_date", (q) => {
-        const scoped = q.eq("workspaceId", workspace._id).eq("isArchived", includeArchived);
-        if (filters.from && filters.to) return scoped.gte("date", filters.from).lte("date", filters.to);
-        if (filters.from) return scoped.gte("date", filters.from);
-        if (filters.to) return scoped.lte("date", filters.to);
-        return scoped;
-      })
-      .order(filters.sort === "date_asc" ? "asc" : "desc")
-      .paginate(args.paginationOpts);
+    const results = await planQuery(ctx, workspace._id, filters, includeArchived).paginate(
+      args.paginationOpts,
+    );
 
     const page = results.page.filter(
       (receipt) =>
@@ -249,14 +295,9 @@ export const list = query({
         matchesFilters(receipt, filters, tagMatches, folderMatches),
     );
 
-    const ordered =
-      filters.sort && !["date_desc", "date_asc"].includes(filters.sort)
-        ? sortReceipts(page, filters.sort)
-        : page;
-
     return {
       ...results,
-      page: await Promise.all(ordered.map((receipt) => serializeReceipt(ctx, receipt))),
+      page: await Promise.all(page.map((receipt) => serializeReceipt(ctx, receipt))),
     };
   },
 });
@@ -273,24 +314,34 @@ export const quickSearch = query({
     const results = await ctx.db
       .query("receipts")
       .withSearchIndex("search_all", (q) =>
-        q.search("searchText", term.slice(0, 200)).eq("workspaceId", workspace._id),
+        q
+          .search("searchText", term.slice(0, 200))
+          .eq("workspaceId", workspace._id)
+          .eq("deletedAt", undefined),
       )
       .take(Math.min(args.limit ?? 8, 25));
 
-    return await Promise.all(
-      results
-        .filter((receipt) => receipt.deletedAt === undefined)
-        .map((receipt) => serializeReceipt(ctx, receipt)),
-    );
+    return await Promise.all(results.map((receipt) => serializeReceipt(ctx, receipt)));
   },
 });
 
 export const get = query({
   args: { receiptId: v.id("receipts") },
   handler: async (ctx, args) => {
-    const { receipt, workspace, member } = await requireReceipt(ctx, args.receiptId, {
-      includeDeleted: true,
-    });
+    // Trashed receipts stay reachable so the trash view can open one, but only
+    // for people who could have deleted it — not every member with the URL.
+    const { receipt, workspace, member, user } = await requireReceipt(
+      ctx,
+      args.receiptId,
+      { includeDeleted: true },
+    );
+
+    if (receipt.deletedAt !== undefined) {
+      const isOwn = receipt.uploaderId === user._id;
+      if (!hasCapability(member.role, isOwn ? "receipt.deleteOwn" : "receipt.deleteAny")) {
+        throw new ConvexError({ code: "NOT_FOUND", message: "Receipt not found." });
+      }
+    }
 
     const [pages, ocr, tagLinks, folderLinks, comments, versions, activityRows] =
       await Promise.all([
@@ -426,6 +477,8 @@ export const get = query({
             overallConfidence: ocr.overallConfidence,
             fieldConfidences: ocr.fieldConfidences,
             error: ocr.error,
+            inconsistencies: ocr.inconsistencies ?? [],
+            promptVersion: ocr.promptVersion,
             processedAt: ocr.processedAt,
           }
         : null,
@@ -483,16 +536,38 @@ export const create = mutation({
     const date = args.date && isValidIsoDate(args.date) ? args.date : todayIso();
     const merchant = (args.merchant ?? "").trim();
 
+    const currency = args.currency?.toUpperCase() ?? workspace.baseCurrency;
+    if (!isSupportedCurrency(currency)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: `${currency} is not a supported currency.`,
+      });
+    }
+
+    const amountCents = Math.max(0, Math.round(args.amountCents ?? 0));
+    if (!isSaneAmount(amountCents)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Amount is out of range.",
+      });
+    }
+
+    const converted = await convertForWorkspace(ctx, {
+      amountCents,
+      currency,
+      baseCurrency: workspace.baseCurrency,
+    });
+
     const receiptId = await ctx.db.insert("receipts", {
       workspaceId: workspace._id,
       uploaderId: user._id,
       status: "uploading",
       merchant,
       merchantNormalized: normalizeMerchant(merchant),
-      amountCents: Math.max(0, Math.round(args.amountCents ?? 0)),
-      currency: args.currency ?? workspace.baseCurrency,
-      baseAmountCents: Math.max(0, Math.round(args.amountCents ?? 0)),
-      exchangeRate: 1,
+      amountCents,
+      currency,
+      baseAmountCents: converted.baseAmountCents,
+      exchangeRate: converted.exchangeRate,
       date,
       paymentMethod: "unknown",
       categoryId: args.categoryId,
@@ -511,6 +586,7 @@ export const create = mutation({
     });
 
     await adjustWorkspaceUsage(ctx, workspace._id, { receipts: 1 });
+    await syncRollups(ctx, null, receiptId);
     await writeActivity(ctx, {
       workspaceId: workspace._id,
       receiptId,
@@ -569,13 +645,41 @@ export const update = mutation({
     assertCanEditReceipt(context, context.receipt);
     const { receipt, user, workspace } = context;
 
+    // A receipt inside a submitted or approved report is evidence for a
+    // decision someone already made. Editing it under the reviewer would make
+    // the approved total and the displayed total disagree.
+    if (receipt.approvalStatus === "submitted" || receipt.approvalStatus === "approved") {
+      throw new ConvexError({
+        code: "LOCKED_FOR_APPROVAL",
+        message:
+          receipt.approvalStatus === "submitted"
+            ? "This receipt is in review. Withdraw the submission before editing it."
+            : "This receipt was approved and can no longer be edited.",
+      });
+    }
+
     const { receiptId, ...updates } = args;
     const patch: Record<string, unknown> = {};
     const changes: { field: string; from: string; to: string }[] = [];
 
+    /**
+     * History rows must be readable by a human months later, so values are
+     * rendered rather than coerced with String() — which turned a category
+     * change into a pair of opaque document ids and an item edit into
+     * "[object Object]".
+     */
+    const render = (value: unknown): string => {
+      if (value === undefined || value === null) return "";
+      if (typeof value === "boolean") return value ? "yes" : "no";
+      if (Array.isArray(value)) return JSON.stringify(value).slice(0, 500);
+      return String(value);
+    };
+
     const record = (field: string, from: unknown, to: unknown) => {
-      if (String(from ?? "") === String(to ?? "")) return;
-      changes.push({ field, from: String(from ?? ""), to: String(to ?? "") });
+      const before = render(from);
+      const after = render(to);
+      if (before === after) return;
+      changes.push({ field, from: before, to: after });
     };
 
     if (updates.merchant !== undefined) {
@@ -588,14 +692,20 @@ export const update = mutation({
     for (const field of ["amountCents", "subtotalCents", "taxCents", "tipCents"] as const) {
       const value = updates[field];
       if (value === undefined) continue;
-      if (!Number.isFinite(value) || value < 0 || value > 1_000_000_000_00) {
+      if (!isSaneAmount(value)) {
         throw new ConvexError({
           code: "INVALID_INPUT",
           message: "Amounts must be between 0 and 1,000,000,000.",
         });
       }
-      record(field, receipt[field], Math.round(value));
-      patch[field] = Math.round(value);
+      const rounded = Math.round(value);
+      const previous = receipt[field];
+      record(
+        field,
+        previous === undefined ? undefined : centsToInput(previous, receipt.currency),
+        centsToInput(rounded, receipt.currency),
+      );
+      patch[field] = rounded;
     }
 
     if (updates.date !== undefined) {
@@ -614,8 +724,15 @@ export const update = mutation({
     }
 
     if (updates.currency !== undefined) {
-      record("currency", receipt.currency, updates.currency);
-      patch.currency = updates.currency;
+      const currency = updates.currency.toUpperCase();
+      if (!isSupportedCurrency(currency)) {
+        throw new ConvexError({
+          code: "INVALID_INPUT",
+          message: `${currency} is not a supported currency.`,
+        });
+      }
+      record("currency", receipt.currency, currency);
+      patch.currency = currency;
     }
     if (updates.exchangeRate !== undefined) {
       if (updates.exchangeRate <= 0 || updates.exchangeRate > 100000) {
@@ -626,13 +743,16 @@ export const update = mutation({
 
     if (updates.categoryId !== undefined) {
       if (updates.categoryId === null) {
+        const previous = receipt.categoryId ? await ctx.db.get(receipt.categoryId) : null;
+        record("category", previous?.name, "");
         patch.categoryId = undefined;
       } else {
         const category = await ctx.db.get(updates.categoryId);
         if (!category || category.workspaceId !== workspace._id) {
           throw new ConvexError({ code: "INVALID_INPUT", message: "Unknown category." });
         }
-        record("category", receipt.categoryId, updates.categoryId);
+        const previous = receipt.categoryId ? await ctx.db.get(receipt.categoryId) : null;
+        record("category", previous?.name, category.name);
         patch.categoryId = updates.categoryId;
       }
     }
@@ -677,7 +797,14 @@ export const update = mutation({
         unitPriceCents: item.unitPriceCents ? Math.round(item.unitPriceCents) : undefined,
         totalCents: Math.round(item.totalCents),
       }));
-      record("items", `${receipt.items.length} items`, `${updates.items.length} items`);
+      // Keep the actual lines, not just a count, so a prior state can be read
+      // back off the history.
+      const describe = (items: { description: string; totalCents: number }[]) =>
+        items
+          .slice(0, 20)
+          .map((item) => `${item.description} ${item.totalCents}`)
+          .join("; ");
+      record("items", describe(receipt.items), describe(updates.items));
     }
 
     // Any human edit clears the low-confidence flag on the touched fields.
@@ -687,9 +814,24 @@ export const update = mutation({
     );
     patch.lowConfidenceFields = remainingLowConfidence;
 
+    // Re-derive the base-currency figure whenever anything feeding it moves.
+    // A hand-entered rate wins; otherwise a currency change re-resolves against
+    // the FX snapshot rather than silently keeping the old pair's rate.
     const nextAmount = (patch.amountCents as number | undefined) ?? receipt.amountCents;
-    const nextRate = (patch.exchangeRate as number | undefined) ?? receipt.exchangeRate;
-    patch.baseAmountCents = Math.round(nextAmount * nextRate);
+    const nextCurrency = (patch.currency as string | undefined) ?? receipt.currency;
+    const currencyChanged = nextCurrency !== receipt.currency;
+    const overrideRate =
+      (patch.exchangeRate as number | undefined) ??
+      (currencyChanged ? undefined : receipt.exchangeRate);
+
+    const converted = await convertForWorkspace(ctx, {
+      amountCents: nextAmount,
+      currency: nextCurrency,
+      baseCurrency: workspace.baseCurrency,
+      overrideRate,
+    });
+    patch.exchangeRate = converted.exchangeRate;
+    patch.baseAmountCents = converted.baseAmountCents;
 
     patch.status = computeReceiptStatus({
       merchant: (patch.merchant as string | undefined) ?? receipt.merchant,
@@ -698,7 +840,9 @@ export const update = mutation({
       lowConfidenceFields: remainingLowConfidence,
     });
 
+    const rollupBefore = contributionOf(receipt);
     await ctx.db.patch(receiptId, patch);
+    await syncRollups(ctx, rollupBefore, receiptId);
     await refreshSearchText(ctx, receiptId);
 
     if (changes.length > 0) {
@@ -727,6 +871,16 @@ export const markReviewed = mutation({
     const context = await requireReceipt(ctx, args.receiptId);
     assertCanEditReceipt(context, context.receipt);
 
+    // Marking reviewed is the human asserting the visible fields are right, so
+    // it clears the review flags — but it cannot manufacture a total out of a
+    // receipt that has none.
+    if (args.reviewed && context.receipt.amountCents <= 0) {
+      throw new ConvexError({
+        code: "INCOMPLETE",
+        message: "Add an amount before marking this receipt reviewed.",
+      });
+    }
+
     await ctx.db.patch(args.receiptId, {
       reviewedAt: args.reviewed ? Date.now() : undefined,
       reviewedBy: args.reviewed ? context.user._id : undefined,
@@ -752,7 +906,9 @@ export const setArchived = mutation({
     for (const receiptId of args.receiptIds) {
       const context = await requireReceipt(ctx, receiptId);
       assertCanEditReceipt(context, context.receipt);
+      const rollupBefore = contributionOf(context.receipt);
       await ctx.db.patch(receiptId, { isArchived: args.archived });
+      await syncRollups(ctx, rollupBefore, receiptId);
       await writeActivity(ctx, {
         workspaceId: context.workspace._id,
         receiptId,
@@ -775,6 +931,9 @@ export const remove = mutation({
       assertCapability(context.member.role, isOwn ? "receipt.deleteOwn" : "receipt.deleteAny");
 
       await ctx.db.patch(receiptId, { deletedAt: Date.now() });
+      // Trash still holds the blobs, so bytes stay counted; the receipt itself
+      // is no longer part of the workspace and must stop being counted as one.
+      await adjustWorkspaceUsage(ctx, context.workspace._id, { receipts: -1 });
       await writeAudit(ctx, {
         workspaceId: context.workspace._id,
         actorId: context.user._id,
@@ -794,6 +953,7 @@ export const restore = mutation({
       const context = await requireReceipt(ctx, receiptId, { includeDeleted: true });
       assertCanEditReceipt(context, context.receipt);
       await ctx.db.patch(receiptId, { deletedAt: undefined });
+      await adjustWorkspaceUsage(ctx, context.workspace._id, { receipts: 1 });
       await writeActivity(ctx, {
         workspaceId: context.workspace._id,
         receiptId,
@@ -822,6 +982,11 @@ export const purge = mutation({
         entityId: receiptId,
         meta: { merchant: context.receipt.merchant, amountCents: context.receipt.amountCents },
       });
+      // Soft delete already removed it from the count; purgeReceipt decrements
+      // again, so add the one back to avoid double-counting the same removal.
+      if (context.receipt.deletedAt !== undefined) {
+        await adjustWorkspaceUsage(ctx, context.workspace._id, { receipts: 1 });
+      }
       await purgeReceipt(ctx, context.receipt);
     }
     return null;
@@ -831,8 +996,12 @@ export const purge = mutation({
 export const duplicate = mutation({
   args: { receiptId: v.id("receipts") },
   handler: async (ctx, args) => {
-    const { receipt, user, workspace, member } = await requireReceipt(ctx, args.receiptId);
+    const context = await requireReceipt(ctx, args.receiptId);
+    const { receipt, user, workspace, member } = context;
     assertCapability(member.role, "receipt.create");
+    // Duplicating is a read of someone else's record into your own; gate it on
+    // the same rule as editing it.
+    assertCanEditReceipt(context, receipt);
 
     const { _id, _creationTime, ...rest } = receipt;
     const copyId = await ctx.db.insert("receipts", {
@@ -865,6 +1034,7 @@ export const duplicate = mutation({
     }
 
     await adjustWorkspaceUsage(ctx, workspace._id, { receipts: 1 });
+    await syncRollups(ctx, null, copyId);
     await refreshSearchText(ctx, copyId);
     await writeActivity(ctx, {
       workspaceId: workspace._id,
@@ -910,7 +1080,11 @@ export const bulkUpdate = mutation({
       if (args.taxDeductible !== undefined) patch.taxDeductible = args.taxDeductible;
       if (args.classification !== undefined) patch.classification = args.classification;
       if (args.reimbursable !== undefined) patch.reimbursable = args.reimbursable;
-      if (Object.keys(patch).length > 0) await ctx.db.patch(receiptId, patch);
+      if (Object.keys(patch).length > 0) {
+        const rollupBefore = contributionOf(context.receipt);
+        await ctx.db.patch(receiptId, patch);
+        await syncRollups(ctx, rollupBefore, receiptId);
+      }
 
       for (const tagId of args.addTagIds ?? []) {
         const existing = await ctx.db
@@ -1009,9 +1183,10 @@ export const addComment = mutation({
       summary: "Added a comment",
     });
 
-    // Keep the uploader in the loop when someone else comments.
+    // Keep the uploader in the loop when someone else comments. Routed through
+    // notifyUser so it honours notification preferences like every other type.
     if (receipt.uploaderId !== user._id) {
-      await ctx.db.insert("notifications", {
+      await notifyUser(ctx, {
         userId: receipt.uploaderId,
         workspaceId: workspace._id,
         type: "comment",

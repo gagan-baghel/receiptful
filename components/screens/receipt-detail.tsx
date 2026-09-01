@@ -320,6 +320,20 @@ export function ReceiptDetail({ receiptId }: { receiptId: Id<"receipts"> }) {
         </Alert>
       ) : null}
 
+      {ocr?.inconsistencies && ocr.inconsistencies.length > 0 ? (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Check these before approving</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-4">
+              {ocr.inconsistencies.map((warning: string) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {ocr?.status === "skipped" ? (
         <Alert>
           <Sparkles className="h-4 w-4" />

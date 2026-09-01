@@ -1,16 +1,43 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { fieldConfidenceValidator, lineItemValidator } from "./schema";
 import { notifyUser, writeActivity } from "./model/guards";
 import {
   computeReceiptStatus,
   deriveLowConfidenceFields,
+  isSaneAmount,
+  isSupportedCurrency,
   isValidIsoDate,
   normalizeMerchant,
   suggestCategory,
   todayIso,
 } from "./model/lib";
+import { convertForWorkspace } from "./model/fx";
 import { refreshSearchText } from "./model/receipts";
+import { contributionOf, syncRollups } from "./model/rollups";
+
+/**
+ * Fields a human has already changed by hand. Every edit writes a
+ * `receiptVersions` row, so this is an exact record of what the user has
+ * claimed ownership of — extraction must never write over any of it.
+ */
+async function humanEditedFields(
+  ctx: MutationCtx,
+  receiptId: Id<"receipts">,
+): Promise<Set<string>> {
+  const versions = await ctx.db
+    .query("receiptVersions")
+    .withIndex("by_receipt", (q) => q.eq("receiptId", receiptId))
+    .collect();
+
+  const edited = new Set<string>();
+  for (const version of versions) {
+    for (const change of version.changes) edited.add(change.field);
+  }
+  return edited;
+}
 
 /** Everything the OCR action needs, in one round trip. */
 export const loadForOcr = internalQuery({
@@ -87,8 +114,14 @@ export const applyExtraction = internalMutation({
   args: {
     receiptId: v.id("receipts"),
     provider: v.string(),
+    promptVersion: v.string(),
     rawText: v.optional(v.string()),
     durationMs: v.number(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    attempts: v.optional(v.number()),
+    /** Deterministic checks the action ran against the model's own numbers. */
+    inconsistencies: v.optional(v.array(v.string())),
     fields: v.object({
       merchant: v.optional(v.string()),
       amountCents: v.optional(v.number()),
@@ -116,35 +149,68 @@ export const applyExtraction = internalMutation({
     const receipt = await ctx.db.get(args.receiptId);
     if (!receipt) return null;
 
+    const workspace = await ctx.db.get(receipt.workspaceId);
+    if (!workspace) return null;
+
+    // Every human edit writes a receiptVersions row naming the fields it
+    // touched. Extraction may fill a blank, but it must never overwrite a
+    // value a person already decided — including date, currency and payment
+    // method, which this merge used to clobber unconditionally.
+    const versions = await ctx.db
+      .query("receiptVersions")
+      .withIndex("by_receipt", (q) => q.eq("receiptId", args.receiptId))
+      .collect();
+
+    const humanEdited = new Set<string>();
+    for (const version of versions) {
+      for (const change of version.changes) humanEdited.add(change.field);
+    }
+    const locked = (field: string) => humanEdited.has(field);
+
     const { fields } = args;
     const patch: Record<string, unknown> = {};
 
-    if (fields.merchant && !receipt.merchant.trim()) {
+    if (fields.merchant && !receipt.merchant.trim() && !locked("merchant")) {
       patch.merchant = fields.merchant.slice(0, 200);
       patch.merchantNormalized = normalizeMerchant(fields.merchant);
     }
-    if (fields.amountCents !== undefined && receipt.amountCents <= 0) {
-      patch.amountCents = Math.max(0, Math.round(fields.amountCents));
+    if (
+      fields.amountCents !== undefined &&
+      isSaneAmount(fields.amountCents) &&
+      receipt.amountCents <= 0 &&
+      !locked("amountCents")
+    ) {
+      patch.amountCents = Math.round(fields.amountCents);
     }
     for (const key of ["subtotalCents", "taxCents", "tipCents"] as const) {
       const value = fields[key];
-      if (value !== undefined && receipt[key] === undefined) {
-        patch[key] = Math.max(0, Math.round(value));
-      }
+      if (value === undefined || !isSaneAmount(value)) continue;
+      if (receipt[key] === undefined && !locked(key)) patch[key] = Math.round(value);
     }
-    if (fields.currency && fields.currency.length === 3) {
+    if (
+      fields.currency &&
+      isSupportedCurrency(fields.currency.toUpperCase()) &&
+      !locked("currency")
+    ) {
       patch.currency = fields.currency.toUpperCase();
     }
-    if (fields.date && isValidIsoDate(fields.date)) {
+    if (fields.date && isValidIsoDate(fields.date) && !locked("date")) {
       patch.date = fields.date;
     }
-    if (fields.time && /^\d{2}:\d{2}$/.test(fields.time)) patch.time = fields.time;
-    if (fields.cardLast4 && /^\d{4}$/.test(fields.cardLast4)) {
+    if (fields.time && /^\d{2}:\d{2}$/.test(fields.time) && !locked("time")) {
+      patch.time = fields.time;
+    }
+    if (fields.cardLast4 && /^\d{4}$/.test(fields.cardLast4) && !locked("cardLast4")) {
       patch.cardLast4 = fields.cardLast4;
     }
 
     const methods = ["card", "cash", "bank_transfer", "wallet", "cheque", "other"];
-    if (fields.paymentMethod && methods.includes(fields.paymentMethod)) {
+    if (
+      fields.paymentMethod &&
+      methods.includes(fields.paymentMethod) &&
+      receipt.paymentMethod === "unknown" &&
+      !locked("paymentMethod")
+    ) {
       patch.paymentMethod = fields.paymentMethod;
     }
 
@@ -153,29 +219,49 @@ export const applyExtraction = internalMutation({
       "address", "phone", "website", "email",
     ] as const) {
       const value = fields[key];
-      if (value && !receipt[key]) patch[key] = value.slice(0, 500);
+      if (value && !receipt[key] && !locked(key)) patch[key] = value.slice(0, 500);
     }
 
-    if (fields.items?.length && receipt.items.length === 0) {
+    if (fields.items?.length && receipt.items.length === 0 && !locked("items")) {
       patch.items = fields.items.slice(0, 200).map((item) => ({
         description: item.description.slice(0, 300),
         quantity: item.quantity,
         unitPriceCents: item.unitPriceCents ? Math.round(item.unitPriceCents) : undefined,
-        totalCents: Math.round(item.totalCents),
+        totalCents: Math.max(0, Math.round(item.totalCents)),
       }));
     }
 
-    const lowConfidenceFields = deriveLowConfidenceFields(args.fieldConfidences);
+    // A field that failed a deterministic cross-check is low-confidence no
+    // matter how sure the model claimed to be.
+    const inconsistencies = args.inconsistencies ?? [];
+    const lowConfidenceFields = [
+      ...new Set([
+        ...deriveLowConfidenceFields(args.fieldConfidences),
+        ...inconsistencies,
+      ]),
+    ].filter((field) => !locked(field));
+
     patch.lowConfidenceFields = lowConfidenceFields;
-    patch.ocrConfidence = args.overallConfidence;
+    patch.ocrConfidence = inconsistencies.length > 0
+      ? Math.min(args.overallConfidence, 0.5)
+      : args.overallConfidence;
 
     const merchant = (patch.merchant as string | undefined) ?? receipt.merchant;
     const amountCents = (patch.amountCents as number | undefined) ?? receipt.amountCents;
     const date = (patch.date as string | undefined) ?? receipt.date;
-    patch.baseAmountCents = Math.round(amountCents * receipt.exchangeRate);
+    const currency = (patch.currency as string | undefined) ?? receipt.currency;
+
+    const converted = await convertForWorkspace(ctx, {
+      amountCents,
+      currency,
+      baseCurrency: workspace.baseCurrency,
+      overrideRate: currency === receipt.currency ? receipt.exchangeRate : undefined,
+    });
+    patch.exchangeRate = converted.exchangeRate;
+    patch.baseAmountCents = converted.baseAmountCents;
 
     // Auto-categorize from the workspace's own categories and their keywords.
-    if (!receipt.categoryId) {
+    if (!receipt.categoryId && !locked("category")) {
       const settings = await ctx.db
         .query("settings")
         .withIndex("by_user", (q) => q.eq("userId", receipt.uploaderId))
@@ -190,7 +276,6 @@ export const applyExtraction = internalMutation({
         const suggestion = suggestCategory(categories, {
           merchant,
           items: (patch.items as { description: string }[] | undefined) ?? receipt.items,
-          rawText: args.rawText,
         });
 
         if (suggestion) {
@@ -198,6 +283,12 @@ export const applyExtraction = internalMutation({
           const category = categories.find((c) => c._id === suggestion.categoryId);
           if (category) {
             patch.taxDeductible = category.taxTreatment !== "non_deductible";
+          }
+          // A guessed category is flagged so the reviewer knows it was inferred
+          // rather than chosen — it drives a tax claim.
+          if (!lowConfidenceFields.includes("category")) {
+            lowConfidenceFields.push("category");
+            patch.lowConfidenceFields = lowConfidenceFields;
           }
         }
       }
@@ -210,7 +301,9 @@ export const applyExtraction = internalMutation({
       lowConfidenceFields,
     });
 
+    const rollupBefore = contributionOf(receipt);
     await ctx.db.patch(args.receiptId, patch);
+    await syncRollups(ctx, rollupBefore, args.receiptId);
 
     const existing = await ctx.db
       .query("ocrResults")
@@ -220,10 +313,15 @@ export const applyExtraction = internalMutation({
     const ocrRow = {
       status: "succeeded" as const,
       provider: args.provider,
+      promptVersion: args.promptVersion,
       rawText: args.rawText?.slice(0, 50000),
-      overallConfidence: args.overallConfidence,
+      overallConfidence: patch.ocrConfidence as number,
       fieldConfidences: args.fieldConfidences,
       durationMs: args.durationMs,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      attempts: args.attempts,
+      inconsistencies,
       processedAt: Date.now(),
       error: undefined,
     };
@@ -243,9 +341,13 @@ export const applyExtraction = internalMutation({
       workspaceId: receipt.workspaceId,
       receiptId: args.receiptId,
       type: "ocr_completed",
-      summary: `Extracted ${args.fieldConfidences.length} fields (${Math.round(
-        args.overallConfidence * 100,
-      )}% confidence)`,
+      summary: inconsistencies.length
+        ? `Extracted with ${inconsistencies.length} field${
+            inconsistencies.length === 1 ? "" : "s"
+          } needing a check`
+        : `Extracted ${args.fieldConfidences.length} fields (${Math.round(
+            (patch.ocrConfidence as number) * 100,
+          )}% confidence)`,
     });
 
     await notifyUser(ctx, {

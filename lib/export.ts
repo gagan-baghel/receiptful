@@ -1,7 +1,5 @@
 "use client"
 
-import * as XLSX from "xlsx"
-
 import { centsToInput, formatDate } from "@/lib/format"
 
 export type ExportRow = {
@@ -104,7 +102,12 @@ export function exportCsv(rows: ExportRow[], name: string, baseCurrency: string)
   download(blob, `${safeName(name)}.csv`)
 }
 
-export function exportExcel(rows: ExportRow[], name: string, baseCurrency: string) {
+/**
+ * Loaded on demand: the spreadsheet writer is large and only one button needs
+ * it, so it should not sit in the bundle of every screen that can export.
+ */
+export async function exportExcel(rows: ExportRow[], name: string, baseCurrency: string) {
+  const XLSX = await import("xlsx")
   const matrix = toMatrix(rows, baseCurrency)
   const sheet = XLSX.utils.aoa_to_sheet([[...COLUMNS], ...matrix])
 

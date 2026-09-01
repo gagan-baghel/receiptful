@@ -24,6 +24,7 @@ import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { confirmDialog } from "@/components/common/confirm"
 import { PageHeader, SectionHeader } from "@/components/common/page-header"
 import { EmptyState, ListSkeleton, Spinner } from "@/components/common/states"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -130,6 +131,11 @@ export function TeamScreen() {
                   <span className="block truncate text-sm font-medium">{item.email}</span>
                   <span className="block text-xs text-muted-foreground">
                     {ROLE_LABELS[item.role]} · expires {formatRelative(item.expiresAt)}
+                    {item.emailSent === false
+                      ? " · not emailed — share the link yourself"
+                      : item.emailSent
+                        ? " · emailed"
+                        : ""}
                   </span>
                 </span>
 
@@ -229,9 +235,13 @@ export function TeamScreen() {
                     aria-label={`Remove ${member.name || member.email}`}
                     onClick={async () => {
                       if (
-                        !window.confirm(
-                          `Remove ${member.name || member.email}? Their receipts stay in the workspace.`,
-                        )
+                        !(await confirmDialog({
+                          title: `Remove ${member.name || member.email}?`,
+                          description:
+                            "They lose access immediately. Their receipts stay in the workspace so reports keep working.",
+                          confirmLabel: "Remove member",
+                          destructive: true,
+                        }))
                       ) {
                         return
                       }
@@ -1027,9 +1037,13 @@ export function SettingsScreen() {
                 className="mt-3"
                 onClick={async () => {
                   if (
-                    !window.confirm(
-                      "Schedule your account for deletion? You have 30 days to change your mind.",
-                    )
+                    !(await confirmDialog({
+                      title: "Schedule your account for deletion?",
+                      description:
+                        "Nothing is removed today. You have 30 days to cancel, after which your account and any workspace only you belong to are erased.",
+                      confirmLabel: "Schedule deletion",
+                      destructive: true,
+                    }))
                   ) {
                     return
                   }

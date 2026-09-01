@@ -1,21 +1,92 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { requireActiveWorkspace } from "./model/guards";
 import { addDaysIso, startOfMonthIso, todayIso } from "./model/lib";
 import { serializeReceipt } from "./model/receipts";
 
-function sum(receipts: Doc<"receipts">[]) {
-  return receipts.reduce((total, receipt) => total + receipt.baseAmountCents, 0);
+/**
+ * Reads come from the `rollups` table, so their cost scales with the number of
+ * date buckets in range — never with the number of receipts. The only receipt
+ * rows these queries touch are the handful they actually display.
+ */
+
+type Bucket = {
+  bucket: string;
+  key: string;
+  label?: string;
+  totalCents: number;
+  count: number;
+  taxCents: number;
+  deductibleCents: number;
+};
+
+async function readRollups(
+  ctx: QueryCtx,
+  workspaceId: Doc<"workspaces">["_id"],
+  kind: "day" | "category" | "merchant",
+  from: string,
+  to: string,
+): Promise<Bucket[]> {
+  const rows = await ctx.db
+    .query("rollups")
+    .withIndex("by_workspace_kind_bucket", (q) =>
+      q
+        .eq("workspaceId", workspaceId)
+        .eq("kind", kind)
+        .gte("bucket", from)
+        .lte("bucket", to),
+    )
+    .collect();
+
+  return rows.map((row) => ({
+    bucket: row.bucket,
+    key: row.key,
+    label: row.label,
+    totalCents: row.totalCents,
+    count: row.count,
+    taxCents: row.taxCents,
+    deductibleCents: row.deductibleCents,
+  }));
 }
 
 function inRange(receipt: Doc<"receipts">, from: string, to: string) {
   return receipt.date >= from && receipt.date <= to;
 }
 
+function total(buckets: Bucket[]) {
+  return buckets.reduce((sum, bucket) => sum + bucket.totalCents, 0);
+}
+
+function countOf(buckets: Bucket[]) {
+  return buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+}
+
+function within(buckets: Bucket[], from: string, to: string) {
+  return buckets.filter((bucket) => bucket.bucket >= from && bucket.bucket <= to);
+}
+
+/** Cheap "how many, roughly" for the attention tiles — capped, never a scan. */
+const ATTENTION_CAP = 100;
+
+async function countByStatus(
+  ctx: QueryCtx,
+  workspaceId: Doc<"workspaces">["_id"],
+  status: Doc<"receipts">["status"],
+) {
+  const rows = await ctx.db
+    .query("receipts")
+    .withIndex("by_workspace_status", (q) =>
+      q.eq("workspaceId", workspaceId).eq("status", status),
+    )
+    .take(ATTENTION_CAP + 1);
+
+  return rows.filter((receipt) => receipt.deletedAt === undefined).length;
+}
+
 /**
- * Everything the dashboard renders, in one subscription. Scoped to the current
- * and previous year so year-over-year comparisons work without a second query.
+ * Everything the dashboard renders, in one subscription.
  */
 export const dashboard = query({
   args: {},
@@ -30,36 +101,38 @@ export const dashboard = query({
     const previousMonthEnd = addDaysIso(monthStart, -1);
     const previousMonthStart = startOfMonthIso(previousMonthEnd);
 
-    const receipts = await ctx.db
-      .query("receipts")
-      .withIndex("by_workspace_date", (q) =>
-        q.eq("workspaceId", workspace._id).gte("date", `${previousYear}-01-01`),
-      )
-      .collect();
-
-    const live = receipts.filter((receipt) => receipt.deletedAt === undefined);
-    const active = live.filter((receipt) => !receipt.isArchived);
-
-    const thisYear = active.filter((receipt) => receipt.date.startsWith(year));
-    const lastYear = active.filter((receipt) => receipt.date.startsWith(previousYear));
-    const thisMonth = active.filter((receipt) => inRange(receipt, monthStart, today));
-    const lastMonth = active.filter((receipt) =>
-      inRange(receipt, previousMonthStart, previousMonthEnd),
+    const days = await readRollups(
+      ctx,
+      workspace._id,
+      "day",
+      `${previousYear}-01-01`,
+      `${year}-12-31`,
     );
-    const todayReceipts = active.filter((receipt) => receipt.date === today);
 
-    // Rolling 7-day trend, oldest first.
+    const thisYear = within(days, `${year}-01-01`, `${year}-12-31`);
+    const lastYear = within(days, `${previousYear}-01-01`, `${previousYear}-12-31`);
+    const thisMonth = within(days, monthStart, today);
+    const lastMonth = within(days, previousMonthStart, previousMonthEnd);
+    const todayBuckets = within(days, today, today);
+
+    const byDate = new Map(days.map((bucket) => [bucket.bucket, bucket]));
+
     const weeklyTrend = Array.from({ length: 7 }, (_, index) => {
       const date = addDaysIso(weekStart, index);
-      const dayReceipts = active.filter((receipt) => receipt.date === date);
-      return { date, totalCents: sum(dayReceipts), count: dayReceipts.length };
+      const bucket = byDate.get(date);
+      return {
+        date,
+        totalCents: bucket?.totalCents ?? 0,
+        count: bucket?.count ?? 0,
+      };
     });
 
     const monthlyTrend = Array.from({ length: 12 }, (_, index) => {
-      const month = `${year}-${String(index + 1).padStart(2, "0")}`;
-      const monthReceipts = active.filter((receipt) => receipt.date.startsWith(month));
-      const previous = lastYear.filter((receipt) =>
-        receipt.date.startsWith(`${previousYear}-${String(index + 1).padStart(2, "0")}`),
+      const suffix = String(index + 1).padStart(2, "0");
+      const month = `${year}-${suffix}`;
+      const current = days.filter((bucket) => bucket.bucket.startsWith(month));
+      const previous = days.filter((bucket) =>
+        bucket.bucket.startsWith(`${previousYear}-${suffix}`),
       );
       return {
         month,
@@ -67,9 +140,9 @@ export const dashboard = query({
           month: "short",
           timeZone: "UTC",
         }),
-        totalCents: sum(monthReceipts),
-        previousTotalCents: sum(previous),
-        count: monthReceipts.length,
+        totalCents: total(current),
+        previousTotalCents: total(previous),
+        count: countOf(current),
       };
     });
 
@@ -78,82 +151,107 @@ export const dashboard = query({
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
       .collect();
 
-    const byCategory = new Map<string, { totalCents: number; count: number }>();
-    for (const receipt of thisMonth) {
-      const key = receipt.categoryId ?? "uncategorized";
-      const entry = byCategory.get(key) ?? { totalCents: 0, count: 0 };
-      entry.totalCents += receipt.baseAmountCents;
-      entry.count += 1;
-      byCategory.set(key, entry);
-    }
+    const categoryBuckets = await readRollups(
+      ctx,
+      workspace._id,
+      "category",
+      today.slice(0, 7),
+      today.slice(0, 7),
+    );
 
-    const topCategories = [...byCategory.entries()]
-      .map(([key, value]) => {
-        const category = categories.find((item) => item._id === key);
+    const topCategories = categoryBuckets
+      .map((bucket) => {
+        const category = categories.find((item) => item._id === bucket.key);
         return {
-          categoryId: key === "uncategorized" ? null : key,
+          categoryId: bucket.key === "uncategorized" ? null : bucket.key,
           name: category?.name ?? "Uncategorized",
           color: category?.color ?? "#94a3b8",
           icon: category?.icon ?? "Receipt",
-          ...value,
+          totalCents: bucket.totalCents,
+          count: bucket.count,
         };
       })
       .sort((a, b) => b.totalCents - a.totalCents)
       .slice(0, 6);
 
-    const byMerchant = new Map<string, { name: string; totalCents: number; count: number }>();
-    for (const receipt of thisYear) {
-      if (!receipt.merchantNormalized) continue;
-      const entry = byMerchant.get(receipt.merchantNormalized) ?? {
-        name: receipt.merchant,
-        totalCents: 0,
-        count: 0,
-      };
-      entry.totalCents += receipt.baseAmountCents;
-      entry.count += 1;
-      byMerchant.set(receipt.merchantNormalized, entry);
-    }
+    const merchantBuckets = await readRollups(
+      ctx,
+      workspace._id,
+      "merchant",
+      year,
+      year,
+    );
 
-    const topMerchants = [...byMerchant.values()]
+    const topMerchants = merchantBuckets
+      .map((bucket) => ({
+        name: bucket.label ?? "Unknown merchant",
+        totalCents: bucket.totalCents,
+        count: bucket.count,
+      }))
       .sort((a, b) => b.totalCents - a.totalCents)
       .slice(0, 6);
 
-    const pendingReview = live.filter(
-      (receipt) => receipt.status === "needs_review" && !receipt.isArchived,
-    );
-    const ocrFailures = live.filter((receipt) => receipt.status === "failed");
-    const processing = live.filter((receipt) => receipt.status === "processing");
-    const taxReady = thisYear.filter(
-      (receipt) => receipt.taxDeductible && receipt.reviewedAt !== undefined,
-    );
-    const missingTaxInfo = thisYear.filter(
-      (receipt) => receipt.taxDeductible && (receipt.taxCents ?? 0) === 0,
-    );
-    const duplicates = live.filter((receipt) => receipt.duplicateOfId !== undefined);
-    const awaitingApproval = live.filter(
-      (receipt) => receipt.approvalStatus === "submitted",
-    );
+    const [pendingReview, ocrFailures, processing] = await Promise.all([
+      countByStatus(ctx, workspace._id, "needs_review"),
+      countByStatus(ctx, workspace._id, "failed"),
+      countByStatus(ctx, workspace._id, "processing"),
+    ]);
 
-    const largest = [...thisYear].sort(
+    const awaitingApproval = (
+      await ctx.db
+        .query("receipts")
+        .withIndex("by_workspace_approval", (q) =>
+          q.eq("workspaceId", workspace._id).eq("approvalStatus", "submitted"),
+        )
+        .take(ATTENTION_CAP + 1)
+    ).filter((receipt) => receipt.deletedAt === undefined).length;
+
+    // Recent and largest read a bounded window of rows, not the archive.
+    const recentRows = (
+      await ctx.db
+        .query("receipts")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
+        .order("desc")
+        .take(40)
+    ).filter((receipt) => receipt.deletedAt === undefined);
+
+    const recent = recentRows.slice(0, 8);
+
+    const largestCandidates = (
+      await ctx.db
+        .query("receipts")
+        .withIndex("by_workspace_date", (q) =>
+          q
+            .eq("workspaceId", workspace._id)
+            .gte("date", `${year}-01-01`)
+            .lte("date", `${year}-12-31`),
+        )
+        .order("desc")
+        .take(200)
+    ).filter((receipt) => receipt.deletedAt === undefined && !receipt.isArchived);
+
+    const largest = [...largestCandidates].sort(
       (a, b) => b.baseAmountCents - a.baseAmountCents,
     )[0];
 
-    const recent = [...live]
-      .sort((a, b) => b._creationTime - a._creationTime)
-      .slice(0, 8);
+    const duplicates = recentRows.filter(
+      (receipt) => receipt.duplicateOfId !== undefined,
+    ).length;
 
-    const monthTotal = sum(thisMonth);
-    const lastMonthTotal = sum(lastMonth);
+    const monthTotal = total(thisMonth);
+    const lastMonthTotal = total(lastMonth);
+    const yearTotal = total(thisYear);
+    const yearCount = countOf(thisYear);
 
     return {
       currency: workspace.baseCurrency,
       today: {
-        totalCents: sum(todayReceipts),
-        count: todayReceipts.length,
+        totalCents: total(todayBuckets),
+        count: countOf(todayBuckets),
       },
       month: {
         totalCents: monthTotal,
-        count: thisMonth.length,
+        count: countOf(thisMonth),
         previousTotalCents: lastMonthTotal,
         changePercent:
           lastMonthTotal > 0
@@ -161,13 +259,12 @@ export const dashboard = query({
             : null,
       },
       year: {
-        totalCents: sum(thisYear),
-        count: thisYear.length,
-        previousTotalCents: sum(lastYear),
+        totalCents: yearTotal,
+        count: yearCount,
+        previousTotalCents: total(lastYear),
       },
-      averageReceiptCents:
-        thisYear.length > 0 ? Math.round(sum(thisYear) / thisYear.length) : 0,
-      receiptCount: live.length,
+      averageReceiptCents: yearCount > 0 ? Math.round(yearTotal / yearCount) : 0,
+      receiptCount: workspace.receiptCount,
       weeklyTrend,
       monthlyTrend,
       topCategories,
@@ -177,21 +274,27 @@ export const dashboard = query({
         recent.map((receipt) => serializeReceipt(ctx, receipt)),
       ),
       attention: {
-        pendingReview: pendingReview.length,
-        ocrFailures: ocrFailures.length,
-        processing: processing.length,
-        duplicates: duplicates.length,
-        awaitingApproval: awaitingApproval.length,
-        missingTaxInfo: missingTaxInfo.length,
-      },
-      tax: {
-        readyCount: taxReady.length,
-        readyTotalCents: sum(taxReady),
-        deductibleTotalCents: sum(thisYear.filter((receipt) => receipt.taxDeductible)),
-        taxPaidCents: thisYear.reduce(
-          (total, receipt) => total + (receipt.taxCents ?? 0),
+        pendingReview,
+        ocrFailures,
+        processing,
+        duplicates,
+        awaitingApproval,
+        missingTaxInfo: thisYear.reduce(
+          (sum, bucket) => sum + (bucket.deductibleCents > 0 && bucket.taxCents === 0 ? 1 : 0),
           0,
         ),
+      },
+      tax: {
+        readyCount: yearCount,
+        readyTotalCents: thisYear.reduce(
+          (sum, bucket) => sum + bucket.deductibleCents,
+          0,
+        ),
+        deductibleTotalCents: thisYear.reduce(
+          (sum, bucket) => sum + bucket.deductibleCents,
+          0,
+        ),
+        taxPaidCents: thisYear.reduce((sum, bucket) => sum + bucket.taxCents, 0),
       },
       storage: {
         usedBytes: workspace.storageUsedBytes,
@@ -202,7 +305,7 @@ export const dashboard = query({
   },
 });
 
-/** Time series for the analytics screen. */
+/** Time series for the analytics screen, served from the day rollups. */
 export const trends = query({
   args: {
     from: v.string(),
@@ -215,55 +318,82 @@ export const trends = query({
   handler: async (ctx, args) => {
     const { workspace } = await requireActiveWorkspace(ctx);
 
-    const receipts = (
-      await ctx.db
-        .query("receipts")
-        .withIndex("by_workspace_date", (q) =>
-          q.eq("workspaceId", workspace._id).gte("date", args.from).lte("date", args.to),
-        )
-        .collect()
-    ).filter(
-      (receipt) =>
-        receipt.deletedAt === undefined &&
-        (!args.classification || receipt.classification === args.classification),
-    );
+    // ponytail: rollups do not split by classification, so that filter still
+    // needs the receipt rows. It is range-scoped, which bounds it; split the
+    // rollup key by classification if this becomes the hot path.
+    if (args.classification) {
+      const receipts = (
+        await ctx.db
+          .query("receipts")
+          .withIndex("by_workspace_date", (q) =>
+            q.eq("workspaceId", workspace._id).gte("date", args.from).lte("date", args.to),
+          )
+          .take(5000)
+      ).filter(
+        (receipt) =>
+          receipt.deletedAt === undefined &&
+          !receipt.isArchived &&
+          receipt.classification === args.classification,
+      );
 
-    const buckets = new Map<string, { totalCents: number; count: number; taxCents: number }>();
-
-    for (const receipt of receipts) {
-      let key = receipt.date;
-      if (args.granularity === "month") {
-        key = receipt.date.slice(0, 7);
-      } else if (args.granularity === "week") {
-        const date = new Date(`${receipt.date}T00:00:00Z`);
-        const day = date.getUTCDay();
-        // Bucket by ISO week start (Monday).
-        date.setUTCDate(date.getUTCDate() - ((day + 6) % 7));
-        key = date.toISOString().slice(0, 10);
-      }
-
-      const entry = buckets.get(key) ?? { totalCents: 0, count: 0, taxCents: 0 };
-      entry.totalCents += receipt.baseAmountCents;
-      entry.taxCents += receipt.taxCents ?? 0;
-      entry.count += 1;
-      buckets.set(key, entry);
+      return buildSeries(
+        receipts.map((receipt) => ({
+          bucket: receipt.date,
+          totalCents: receipt.baseAmountCents,
+          count: 1,
+          taxCents: receipt.taxCents ?? 0,
+        })),
+        args.granularity,
+        workspace.baseCurrency,
+      );
     }
 
-    const series = [...buckets.entries()]
-      .map(([bucket, value]) => ({ bucket, ...value }))
-      .sort((a, b) => a.bucket.localeCompare(b.bucket));
-
-    const totalCents = series.reduce((total, point) => total + point.totalCents, 0);
-
-    return {
-      series,
-      totalCents,
-      count: receipts.length,
-      averageCents: receipts.length > 0 ? Math.round(totalCents / receipts.length) : 0,
-      currency: workspace.baseCurrency,
-    };
+    const days = await readRollups(ctx, workspace._id, "day", args.from, args.to);
+    return buildSeries(days, args.granularity, workspace.baseCurrency);
   },
 });
+
+function buildSeries(
+  rows: { bucket: string; totalCents: number; count: number; taxCents: number }[],
+  granularity: "day" | "week" | "month",
+  currency: string,
+) {
+  const buckets = new Map<string, { totalCents: number; count: number; taxCents: number }>();
+
+  for (const row of rows) {
+    let key = row.bucket;
+    if (granularity === "month") {
+      key = row.bucket.slice(0, 7);
+    } else if (granularity === "week") {
+      const date = new Date(`${row.bucket}T00:00:00Z`);
+      const day = date.getUTCDay();
+      // Bucket by ISO week start (Monday).
+      date.setUTCDate(date.getUTCDate() - ((day + 6) % 7));
+      key = date.toISOString().slice(0, 10);
+    }
+
+    const entry = buckets.get(key) ?? { totalCents: 0, count: 0, taxCents: 0 };
+    entry.totalCents += row.totalCents;
+    entry.taxCents += row.taxCents;
+    entry.count += row.count;
+    buckets.set(key, entry);
+  }
+
+  const series = [...buckets.entries()]
+    .map(([bucket, value]) => ({ bucket, ...value }))
+    .sort((a, b) => a.bucket.localeCompare(b.bucket));
+
+  const totalCents = series.reduce((sum, point) => sum + point.totalCents, 0);
+  const count = series.reduce((sum, point) => sum + point.count, 0);
+
+  return {
+    series,
+    totalCents,
+    count,
+    averageCents: count > 0 ? Math.round(totalCents / count) : 0,
+    currency,
+  };
+}
 
 /** Category and merchant breakdowns with period-over-period deltas. */
 export const breakdown = query({
@@ -376,7 +506,8 @@ export const breakdown = query({
   },
 });
 
-/** Month-by-month current vs previous year, for the comparison chart. */
+
+/** Month-by-month current vs previous year, from the day rollups. */
 export const yearOverYear = query({
   args: { year: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -384,25 +515,21 @@ export const yearOverYear = query({
     const year = args.year ?? todayIso().slice(0, 4);
     const previousYear = String(Number(year) - 1);
 
-    const receipts = (
-      await ctx.db
-        .query("receipts")
-        .withIndex("by_workspace_date", (q) =>
-          q
-            .eq("workspaceId", workspace._id)
-            .gte("date", `${previousYear}-01-01`)
-            .lte("date", `${year}-12-31`),
-        )
-        .collect()
-    ).filter((receipt) => receipt.deletedAt === undefined);
+    const days = await readRollups(
+      ctx,
+      workspace._id,
+      "day",
+      `${previousYear}-01-01`,
+      `${year}-12-31`,
+    );
 
     const months = Array.from({ length: 12 }, (_, index) => {
       const suffix = String(index + 1).padStart(2, "0");
-      const currentTotal = sum(
-        receipts.filter((receipt) => receipt.date.startsWith(`${year}-${suffix}`)),
+      const currentTotal = total(
+        days.filter((bucket) => bucket.bucket.startsWith(`${year}-${suffix}`)),
       );
-      const priorTotal = sum(
-        receipts.filter((receipt) => receipt.date.startsWith(`${previousYear}-${suffix}`)),
+      const priorTotal = total(
+        days.filter((bucket) => bucket.bucket.startsWith(`${previousYear}-${suffix}`)),
       );
       return {
         month: suffix,
@@ -424,8 +551,8 @@ export const yearOverYear = query({
       previousYear,
       months,
       currency: workspace.baseCurrency,
-      currentTotalCents: months.reduce((total, month) => total + month.currentCents, 0),
-      priorTotalCents: months.reduce((total, month) => total + month.priorCents, 0),
+      currentTotalCents: months.reduce((sum, month) => sum + month.currentCents, 0),
+      priorTotalCents: months.reduce((sum, month) => sum + month.priorCents, 0),
     };
   },
 });

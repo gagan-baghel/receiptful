@@ -42,6 +42,7 @@ import {
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { errorMessage } from "@/lib/errors"
+import { confirmDialog } from "@/components/common/confirm"
 import { formatMoney, inputToCents } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -182,7 +183,14 @@ export function FoldersScreen() {
                   className="h-7 w-7 text-muted-foreground hover:text-destructive"
                   aria-label={`Delete ${folder.name}`}
                   onClick={async () => {
-                    if (!window.confirm(`Delete "${folder.name}"? Receipts inside are kept.`)) return
+                    const ok = await confirmDialog({
+                      title: `Delete "${folder.name}"?`,
+                      description:
+                        "Receipts inside stay in the workspace — only the folder is removed.",
+                      confirmLabel: "Delete folder",
+                      destructive: true,
+                    })
+                    if (!ok) return
                     try {
                       await remove({ folderId: folder._id })
                       toast.success("Folder deleted")
@@ -448,13 +456,15 @@ export function CategoriesScreen() {
                     className="h-8 w-8 text-muted-foreground hover:text-destructive"
                     aria-label={`Delete ${category.name}`}
                     onClick={async () => {
-                      if (
-                        !window.confirm(
-                          `Delete "${category.name}"? Its ${category.receiptCount} receipts become uncategorised.`,
-                        )
-                      ) {
-                        return
-                      }
+                      const ok = await confirmDialog({
+                        title: `Delete "${category.name}"?`,
+                        description: `Its ${category.receiptCount} receipt${
+                          category.receiptCount === 1 ? "" : "s"
+                        } become uncategorised. Nothing is deleted.`,
+                        confirmLabel: "Delete category",
+                        destructive: true,
+                      })
+                      if (!ok) return
                       try {
                         const moved = await removeCategory({ categoryId: category._id })
                         toast.success(
@@ -528,7 +538,15 @@ export function CategoriesScreen() {
                   type="button"
                   aria-label={`Delete tag ${tag.name}`}
                   onClick={async () => {
-                    if (!window.confirm(`Delete the "${tag.name}" tag from every receipt?`)) return
+                    const ok = await confirmDialog({
+                      title: `Delete the "${tag.name}" tag?`,
+                      description: `It is removed from all ${tag.usageCount} receipt${
+                        tag.usageCount === 1 ? "" : "s"
+                      } using it.`,
+                      confirmLabel: "Delete tag",
+                      destructive: true,
+                    })
+                    if (!ok) return
                     await removeTag({ tagId: tag._id })
                     toast.success("Tag deleted")
                   }}
@@ -715,7 +733,13 @@ export function BudgetsScreen() {
                   className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                   aria-label={`Delete ${budget.name}`}
                   onClick={async () => {
-                    if (!window.confirm(`Delete the "${budget.name}" budget?`)) return
+                    const ok = await confirmDialog({
+                      title: `Delete the "${budget.name}" budget?`,
+                      description: "Spending is unaffected — only the limit and its alerts go.",
+                      confirmLabel: "Delete budget",
+                      destructive: true,
+                    })
+                    if (!ok) return
                     await remove({ budgetId: budget._id })
                     toast.success("Budget deleted")
                   }}
@@ -898,13 +922,16 @@ export function TrashScreen() {
             <Button
               variant="outline"
               onClick={async () => {
-                if (
-                  !window.confirm(
-                    `Permanently delete all ${receipts.length} receipts? This cannot be undone.`,
-                  )
-                ) {
-                  return
-                }
+                const ok = await confirmDialog({
+                  title: `Permanently delete ${receipts.length} receipt${
+                    receipts.length === 1 ? "" : "s"
+                  }?`,
+                  description:
+                    "This erases the receipts and their images for good. It cannot be undone.",
+                  confirmLabel: "Delete permanently",
+                  destructive: true,
+                })
+                if (!ok) return
                 await purge({ receiptIds: receipts.map((receipt) => receipt._id) })
                 toast.success("Trash emptied")
               }}
@@ -950,7 +977,14 @@ export function TrashScreen() {
                     className="h-8 w-8 text-muted-foreground hover:text-destructive"
                     aria-label={`Permanently delete ${receipt.merchant || "receipt"}`}
                     onClick={async () => {
-                      if (!window.confirm("Permanently delete this receipt?")) return
+                      const ok = await confirmDialog({
+                        title: "Permanently delete this receipt?",
+                        description:
+                          "The receipt and its images are erased for good. This cannot be undone.",
+                        confirmLabel: "Delete permanently",
+                        destructive: true,
+                      })
+                      if (!ok) return
                       await purge({ receiptIds: [receipt._id] })
                       toast.success("Receipt permanently deleted")
                     }}

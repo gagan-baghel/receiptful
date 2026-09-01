@@ -294,7 +294,35 @@ export function AnalyticsScreen() {
           </ul>
         </ChartCard>
 
-        <ChartCard title="Top merchants" description="Highest spend in this period.">
+        <ChartCard
+          title="Top merchants"
+          description="Highest spend in this period."
+          tableView={
+            <table className="w-full text-sm">
+              <caption className="sr-only">Top merchants by spend</caption>
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th scope="col" className="pb-2 font-medium">Merchant</th>
+                  <th scope="col" className="pb-2 text-right font-medium">Receipts</th>
+                  <th scope="col" className="pb-2 text-right font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown.merchants.slice(0, 10).map((merchant) => (
+                  <tr key={merchant.name} className="border-b last:border-0">
+                    <th scope="row" className="py-2 pr-3 text-left font-normal">
+                      {merchant.name}
+                    </th>
+                    <td className="py-2 text-right font-numeric">{merchant.count}</td>
+                    <td className="py-2 text-right font-numeric">
+                      {formatMoney(merchant.totalCents, currency)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          }
+        >
           {breakdown.merchants.length === 0 ? (
             <p className="py-16 text-center text-sm text-muted-foreground">
               No merchants to rank yet.

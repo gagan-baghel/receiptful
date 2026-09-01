@@ -25,6 +25,7 @@ import type * as model_lib from "../model/lib.js";
 import type * as model_receipts from "../model/receipts.js";
 import type * as notifications from "../notifications.js";
 import type * as ocr from "../ocr.js";
+import type * as invites from "../invites.js";
 import type * as ocrStore from "../ocrStore.js";
 import type * as rateLimits from "../rateLimits.js";
 import type * as receipts from "../receipts.js";
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   "model/receipts": typeof model_receipts;
   notifications: typeof notifications;
   ocr: typeof ocr;
+  invites: typeof invites;
   ocrStore: typeof ocrStore;
   rateLimits: typeof rateLimits;
   receipts: typeof receipts;

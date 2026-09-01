@@ -4,9 +4,54 @@ import { internalAction, internalMutation, query } from "./_generated/server";
 import { notifyUser } from "./model/guards";
 import { todayIso } from "./model/lib";
 import { purgeReceipt } from "./model/receipts";
+import { applyRollupDelta, contributionOf } from "./model/rollups";
 
 const TRASH_RETENTION_DAYS = 30;
 const ACCOUNT_DELETION_GRACE_DAYS = 30;
+/** How long a receipt may sit mid-upload before it is treated as abandoned. */
+const ABANDONED_UPLOAD_HOURS = 24;
+
+/**
+ * Removes receipts that were created for an upload that never finished, plus
+ * the blobs they orphaned.
+ *
+ * The capture flow creates the receipt row before the first byte is uploaded,
+ * so every closed tab, dropped connection or cancelled dialog used to leave a
+ * permanent `uploading` row counting against the workspace with no way to see
+ * or clear it.
+ */
+export const sweepAbandonedUploads = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - ABANDONED_UPLOAD_HOURS * 60 * 60 * 1000;
+    const workspaces = await ctx.db.query("workspaces").collect();
+    let swept = 0;
+
+    for (const workspace of workspaces) {
+      const stuck = await ctx.db
+        .query("receipts")
+        .withIndex("by_workspace_status", (q) =>
+          q.eq("workspaceId", workspace._id).eq("status", "uploading"),
+        )
+        .collect();
+
+      for (const receipt of stuck) {
+        if (receipt._creationTime > cutoff) continue;
+        // A row that never got a page has nothing worth keeping. One that did
+        // is a finished upload whose finalize call was lost — recover it into
+        // the review queue instead of destroying the user's photo.
+        if (receipt.pageCount > 0) {
+          await ctx.db.patch(receipt._id, { status: "needs_review" });
+          continue;
+        }
+        await purgeReceipt(ctx, receipt);
+        swept += 1;
+      }
+    }
+
+    return swept;
+  },
+});
 
 /** Permanently removes receipts that have sat in trash past the retention window. */
 export const purgeExpiredTrash = internalMutation({
@@ -82,6 +127,7 @@ export const autoArchive = internalMutation({
         if (receipt.date >= cutoff) continue;
         if (receipt.approvalStatus === "submitted") continue;
         await ctx.db.patch(receipt._id, { isArchived: true });
+        await applyRollupDelta(ctx, contributionOf(receipt), null);
         archived += 1;
       }
     }
@@ -280,5 +326,46 @@ export const exchangeRates = query({
       rates: JSON.parse(row.ratesJson) as Record<string, number>,
       fetchedAt: row.fetchedAt,
     };
+  },
+});
+
+/**
+ * Rebuilds the rollup table from the receipts themselves.
+ *
+ * Run once after deploying the rollups (existing receipts predate the
+ * incremental maintenance), and any time you suspect drift. Safe to re-run: it
+ * clears a workspace's buckets before recounting them.
+ *
+ *   npx convex run --prod maintenance:rebuildRollups
+ */
+export const rebuildRollups = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const workspaces = await ctx.db.query("workspaces").collect();
+    let rebuilt = 0;
+
+    for (const workspace of workspaces) {
+      const stale = await ctx.db
+        .query("rollups")
+        .withIndex("by_workspace_kind_bucket", (q) =>
+          q.eq("workspaceId", workspace._id),
+        )
+        .collect();
+      for (const row of stale) await ctx.db.delete(row._id);
+
+      const receipts = await ctx.db
+        .query("receipts")
+        .withIndex("by_workspace", (q) => q.eq("workspaceId", workspace._id))
+        .collect();
+
+      for (const receipt of receipts) {
+        const contribution = contributionOf(receipt);
+        if (!contribution) continue;
+        await applyRollupDelta(ctx, null, contribution);
+        rebuilt += 1;
+      }
+    }
+
+    return rebuilt;
   },
 });
