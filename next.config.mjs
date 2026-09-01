@@ -1,6 +1,16 @@
 /** @type {import('next').NextConfig} */
+/**
+ * Prerendering imports the Convex auth provider, which throws when this is
+ * unset — that failed the whole build on a fresh Vercel project before the
+ * env var had been added. A placeholder keeps the build green; the app renders
+ * a "backend not configured" notice at runtime instead of a blank screen.
+ */
+const convexUrl =
+  process.env.NEXT_PUBLIC_CONVEX_URL || "https://placeholder.convex.cloud";
+
 const nextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_CONVEX_URL: convexUrl },
   poweredByHeader: false,
   typescript: {
     ignoreBuildErrors: false,
