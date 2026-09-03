@@ -11,6 +11,12 @@
   Built with Next.js 15 (App Router), Convex and Tailwind CSS.
 </p>
 
+<p align="center">
+  <a href="https://mobile-receipt-management-app.vercel.app"><b>Live demo</b></a>
+</p>
+
+![Receiptful dashboard](public/screenshots/16-dashboard-home.png)
+
 ## Features
 
 **Capture & extraction**
